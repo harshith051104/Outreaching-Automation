@@ -969,8 +969,9 @@ export default function FlowBuilderPage() {
                         strokeWidth="12"
                         className="cursor-pointer"
                         onClick={() => deleteEdge(edge.id)}
-                        title="Click to delete connection"
-                      />
+                      >
+                        <title>Click to delete connection</title>
+                      </path>
                       {/* Arrow tip at target */}
                       <polygon
                         points={`${tgtCoords.inX},${tgtCoords.inY} ${tgtCoords.inX - 6},${tgtCoords.inY - 4} ${tgtCoords.inX - 6},${tgtCoords.inY + 4}`}
