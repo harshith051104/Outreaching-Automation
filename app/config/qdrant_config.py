@@ -24,7 +24,7 @@ _qdrant_client: QdrantClient | None = None
 
 
 def get_qdrant_client() -> QdrantClient:
-    """Return a (cached) Qdrant client pointed at the configured host/port.
+    """Return a (cached) Qdrant client pointed at the configured host/port or URL.
     
     If the remote Qdrant server is not reachable, falls back to a local
     persistent SQLite/file-based database in the storage directory to allow
@@ -34,31 +34,37 @@ def get_qdrant_client() -> QdrantClient:
     if _qdrant_client is None:
         try:
             # Attempt to connect to remote Qdrant server
-            client = QdrantClient(
-                host=settings.QDRANT_HOST,
-                port=settings.QDRANT_PORT,
-                timeout=5.0,
-                check_compatibility=False,
-            )
+            if settings.QDRANT_URL:
+                client = QdrantClient(
+                    url=settings.QDRANT_URL,
+                    api_key=settings.QDRANT_API_KEY or None,
+                    timeout=5.0,
+                    check_compatibility=False,
+                )
+                display_dest = settings.QDRANT_URL
+            else:
+                client = QdrantClient(
+                    host=settings.QDRANT_HOST,
+                    port=settings.QDRANT_PORT,
+                    timeout=5.0,
+                    check_compatibility=False,
+                )
+                display_dest = f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
             # Verify connectivity by making a simple call
             client.get_collections()
             _qdrant_client = client
-            logger.info(
-                "Qdrant client initialised (Remote Server) → %s:%s",
-                settings.QDRANT_HOST,
-                settings.QDRANT_PORT,
-            )
+            logger.info("Qdrant client initialised (Remote Server) → %s", display_dest)
         except Exception as exc:
             import os
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             local_path = os.path.join(base_dir, "storage", "qdrant_local")
             os.makedirs(local_path, exist_ok=True)
             
+            display_dest = settings.QDRANT_URL if settings.QDRANT_URL else f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
             logger.warning(
-                "Could not connect to Qdrant server at %s:%s (%s). "
+                "Could not connect to Qdrant server at %s (%s). "
                 "Falling back to local persistent storage at '%s'.",
-                settings.QDRANT_HOST,
-                settings.QDRANT_PORT,
+                display_dest,
                 str(exc),
                 local_path,
             )

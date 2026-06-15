@@ -36,6 +36,8 @@ class Settings(BaseSettings):
 
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
+    QDRANT_URL: str = ""
+    QDRANT_API_KEY: str = ""
     QDRANT_COLLECTION: str = "outreach"
 
     JWT_SECRET: str = "change-me-in-production-use-strong-random-key"
