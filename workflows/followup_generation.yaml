@@ -1,0 +1,118 @@
+name: Follow-up Generation Workflow
+description: Generate follow-up emails based on sequence number and engagement signals
+
+version: 1.0.0
+
+agents:
+  - followup_agent
+  - email_writer
+
+skills:
+  - followup_generation
+  - email_generation
+  - rag_retrieval
+
+steps:
+  - id: get_original_email
+    action: mongodb_query_one
+    input:
+      collection: emails
+      query: {id: "{{inputs.email_id}}"}
+    output_var: original_email
+
+  - id: get_lead_context
+    action: mongodb_query_one
+    input:
+      collection: leads
+      query: {id: "{{inputs.lead_id}}"}
+    output_var: lead
+
+  - id: get_engagement_signals
+    action: compute_engagement
+    input:
+      lead_id: "{{inputs.lead_id}}"
+      campaign_id: "{{inputs.campaign_id}}"
+    output_var: engagement_data
+
+  - id: retrieve_followup_memories
+    action: rag_search
+    input:
+      collection: emails
+      query: "successful follow-up sequence {{inputs.sequence_number}}"
+      limit: 3
+      current_campaign_id: "{{inputs.campaign_id}}"
+    output_var: memory_context
+
+  - id: determine_approach
+    action: select_approach
+    input:
+      sequence_number: "{{inputs.sequence_number}}"
+      engagement_data: "{{steps.get_engagement_signals.output}}"
+    output_var: approach
+
+  - id: generate_followup
+    agent: followup_agent
+    input:
+      campaign_id: "{{inputs.campaign_id}}"
+      original_email:
+        subject: "{{steps.get_original_email.output.subject}}"
+        body_text: "{{steps.get_original_email.output.body_text}}"
+      lead_data:
+        name: "{{steps.get_lead_context.output.name}}"
+        company: "{{steps.get_lead_context.output.company}}"
+        role: "{{steps.get_lead_context.output.role}}"
+      sequence_number: "{{inputs.sequence_number}}"
+      engagement_data: "{{steps.get_engagement_signals.output}}"
+    output_var: followup_content
+
+  - id: determine_delay
+    action: calculate_delay
+    input:
+      sequence_number: "{{inputs.sequence_number}}"
+      approach: "{{steps.determine_approach.output}}"
+    output_var: delay_hours
+
+  - id: create_followup_email
+    action: mongodb_insert
+    input:
+      collection: emails
+      document:
+        campaign_id: "{{inputs.campaign_id}}"
+        lead_id: "{{inputs.lead_id}}"
+        subject: "{{steps.generate_followup.output.subject}}"
+        body_html: "{{steps.generate_followup.output.body_html}}"
+        body_text: "{{steps.generate_followup.output.body_text}}"
+        sequence_number: "{{inputs.sequence_number}}"
+        status: draft
+    output_var: email_record
+
+  - id: update_followup_task
+    action: mongodb_update
+    input:
+      collection: followup_tasks
+      query: {id: "{{inputs.followup_task_id}}"}
+      update:
+        status: executed
+        result_email_id: "{{steps.create_followup_email.output.id}}"
+        executed_at: "{{now}}"
+    output_var: task_update
+
+outputs:
+  followup_email_id: "{{steps.create_followup_email.output.id}}"
+  subject: "{{steps.generate_followup.output.subject}}"
+  approach: "{{steps.determine_approach.output}}"
+  recommended_delay: "{{steps.determine_delay.output}}"
+  new_value_added: "{{steps.generate_followup.output.new_value_added}}"
+
+error_handling:
+  - step: generate_followup
+    on_failure: template_fallback
+    retry_count: 1
+
+template_fallback:
+  - action: generate_template_followup
+    input:
+      sequence_number: "{{inputs.sequence_number}}"
+      original_subject: "{{steps.get_original_email.output.subject}}"
+      lead_name: "{{steps.get_lead_context.output.name}}"
+    output_var: fallback_content

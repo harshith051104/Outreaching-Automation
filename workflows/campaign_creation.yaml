@@ -1,0 +1,53 @@
+name: Campaign Creation Workflow
+description: Create a new campaign with initial configuration
+
+version: 1.0.0
+
+steps:
+  - id: validate_input
+    action: validate
+    input:
+      schema:
+        name: {type: string, required: true}
+        gmail_account_id: {type: string, required: false}
+      data: "{{inputs}}"
+    output_var: validation
+
+  - id: resolve_gmail_account
+    action: resolve_or_select_gmail
+    input:
+      requested_account_id: "{{inputs.gmail_account_id}}"
+      user_id: "{{inputs.user_id}}"
+    output_var: gmail_account
+
+  - id: create_campaign_doc
+    action: build_campaign_document
+    input:
+      name: "{{inputs.name}}"
+      description: "{{inputs.description}}"
+      user_id: "{{inputs.user_id}}"
+      gmail_account_id: "{{steps.resolve_gmail_account.output.id}}"
+      subject_template: "{{inputs.subject_template}}"
+      body_template: "{{inputs.body_template}}"
+      settings: "{{inputs.settings}}"
+    output_var: campaign_doc
+
+  - id: insert_campaign
+    action: mongodb_insert
+    input:
+      collection: campaigns
+      document: "{{steps.create_campaign_doc.output}}"
+    output_var: insert_result
+
+  - id: create_default_sequence
+    action: create_default_steps
+    input:
+      campaign_id: "{{steps.insert_campaign.output.id}}"
+      body_template: "{{inputs.body_template}}"
+      subject_template: "{{inputs.subject_template}}"
+    output_var: sequence_steps
+
+outputs:
+  campaign_id: "{{steps.insert_campaign.output.id}}"
+  gmail_account_id: "{{steps.resolve_gmail_account.output.id}}"
+  sequence_steps: "{{steps.sequence_steps.output}}"

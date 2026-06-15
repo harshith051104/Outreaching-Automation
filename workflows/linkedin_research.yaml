@@ -1,0 +1,74 @@
+name: LinkedIn Research Workflow
+description: Research a LinkedIn profile - scrape via Playwright, web research, personalize
+
+version: 1.0.0
+
+agents:
+  - linkedin_research_agent
+  - linkedin_personalization_agent
+  - research_agent
+
+skills:
+  - linkedin_profile_scrape
+  - linkedin_generate_connection_note
+
+steps:
+  - id: validate_session
+    action: linkedin_validate_session
+    input:
+      user_id: "{{inputs.user_id}}"
+    output_var: session_status
+
+  - id: scrape_profile
+    action: linkedin_profile_scrape
+    input:
+      linkedin_url: "{{inputs.linkedin_url}}"
+      user_id: "{{inputs.user_id}}"
+    output_var: profile_data
+
+  - id: web_research
+    agent: research_agent
+    input:
+      name: "{{steps.scrape_profile.output.name}}"
+      company: "{{steps.scrape_profile.output.experience.0.company}}"
+      role: "{{steps.scrape_profile.output.headline}}"
+      linkedin_url: "{{inputs.linkedin_url}}"
+    output_var: research_data
+
+  - id: personalize
+    agent: linkedin_personalization_agent
+    input:
+      profile_data: "{{steps.scrape_profile.output}}"
+      research_data: "{{steps.web_research.output}}"
+      outreach_type: "{{inputs.outreach_type}}"
+    output_var: personalization_data
+
+  - id: store_research
+    action: mongodb_upsert
+    input:
+      collection: lead_memories
+      query:
+        linkedin_url: "{{inputs.linkedin_url}}"
+        user_id: "{{inputs.user_id}}"
+      doc:
+        linkedin_url: "{{inputs.linkedin_url}}"
+        user_id: "{{inputs.user_id}}"
+        profile_data: "{{steps.scrape_profile.output}}"
+        research_data: "{{steps.web_research.output}}"
+        personalization_data: "{{steps.personalize.output}}"
+        researched_at: "{{inputs.timestamp}}"
+    output_var: store_result
+
+outputs:
+  profile_data: "{{steps.scrape_profile.output}}"
+  research_data: "{{steps.web_research.output}}"
+  personalization_data: "{{steps.personalize.output}}"
+
+error_handling:
+  - step: scrape_profile
+    on_failure: log_error
+    retry_count: 1
+
+  - step: web_research
+    on_failure: log_error
+    retry_count: 1

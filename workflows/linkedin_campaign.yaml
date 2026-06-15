@@ -1,0 +1,90 @@
+name: LinkedIn Campaign Workflow
+description: Execute a LinkedIn outreach campaign across selected leads
+
+version: 1.0.0
+
+agents:
+  - linkedin_campaign_agent
+  - linkedin_message_agent
+
+skills:
+  - linkedin_campaign_execution
+  - linkedin_generate_connection_note
+
+steps:
+  - id: load_campaign
+    action: mongodb_query_one
+    input:
+      collection: linkedin_campaigns
+      query:
+        id: "{{inputs.campaign_id}}"
+        user_id: "{{inputs.user_id}}"
+    output_var: campaign_data
+
+  - id: select_leads
+    action: mongodb_query
+    input:
+      collection: leads
+      query:
+        user_id: "{{inputs.user_id}}"
+        linkedin:
+          $exists: true
+          $ne: ""
+        status:
+          $nin: ["linkedin_contacted", "closed_won", "closed_lost"]
+      limit: 50
+    output_var: available_leads
+
+  - id: check_daily_limits
+    action: linkedin_check_daily_limit
+    input:
+      user_id: "{{inputs.user_id}}"
+      action_type: "connection"
+    output_var: daily_limits
+
+  - id: plan_execution
+    agent: linkedin_campaign_agent
+    input:
+      campaign_config: "{{steps.load_campaign.output}}"
+      available_leads: "{{steps.select_leads.output}}"
+      daily_limits: "{{steps.check_daily_limits.output}}"
+    output_var: execution_plan
+
+  - id: create_action_drafts
+    foreach: "{{steps.plan_execution.output.execution_plan}}"
+    action: mongodb_insert
+    input:
+      collection: linkedin_actions
+      document:
+        user_id: "{{inputs.user_id}}"
+        campaign_id: "{{inputs.campaign_id}}"
+        lead_id: "{{item.lead_id}}"
+        linkedin_url: "{{item.linkedin_url}}"
+        action_type: "{{item.action_type}}"
+        status: "pending_approval"
+        priority: "{{item.priority}}"
+        scheduled_day: "{{item.scheduled_day}}"
+        created_at: "{{inputs.timestamp}}"
+    output_var: draft_results
+
+  - id: update_campaign_status
+    action: mongodb_update
+    input:
+      collection: linkedin_campaigns
+      query:
+        id: "{{inputs.campaign_id}}"
+      update:
+        status: "active"
+        total_planned_actions: "{{steps.plan_execution.output.total_actions}}"
+        updated_at: "{{inputs.timestamp}}"
+    output_var: campaign_update
+
+outputs:
+  total_actions: "{{steps.plan_execution.output.total_actions}}"
+  estimated_days: "{{steps.plan_execution.output.estimated_days}}"
+  status: "active"
+
+error_handling:
+  - step: plan_execution
+    on_failure: log_error
+    retry_count: 1

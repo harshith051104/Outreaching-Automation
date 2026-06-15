@@ -1,0 +1,132 @@
+name: Analytics Learning Workflow
+description: Analyze campaign performance, compare with past, generate insights, store learnings
+
+version: 1.0.0
+
+agents:
+  - analytics_agent
+
+skills:
+  - campaign_analysis
+  - rag_retrieval
+
+steps:
+  - id: compute_metrics
+    action: compute_campaign_metrics
+    input:
+      campaign_id: "{{inputs.campaign_id}}"
+    output_var: metrics
+
+  - id: get_campaign_data
+    action: mongodb_query_one
+    input:
+      collection: campaigns
+      query: {id: "{{inputs.campaign_id}}"}
+    output_var: campaign
+
+  - id: retrieve_past_learnings
+    action: mongodb_query
+    input:
+      collection: analytics_learning_memory
+      query: {}
+      sort: {analyzed_at: -1}
+      limit: 5
+    output_var: past_learnings
+
+  - id: retrieve_other_campaigns
+    action: mongodb_query
+    input:
+      collection: campaigns
+      query:
+        user_id: "{{inputs.user_id}}"
+        id: {$ne: "{{inputs.campaign_id}}"}
+      limit: 10
+    output_var: other_campaigns
+
+  - id: compute_other_metrics
+    action: compute_campaign_metrics_batch
+    input:
+      campaign_ids: "{{steps.retrieve_other_campaigns.output.ids}}"
+    output_var: other_metrics
+
+  - id: generate_insights
+    agent: analytics_agent
+    input:
+      campaign_data:
+        campaign_id: "{{inputs.campaign_id}}"
+        name: "{{steps.get_campaign_data.output.name}}"
+        emails_sent: "{{steps.compute_metrics.output.emails_sent}}"
+        opens: "{{steps.compute_metrics.output.unique_opens}}"
+        clicks: "{{steps.compute_metrics.output.unique_clicks}}"
+        replies: "{{steps.compute_metrics.output.total_replies}}"
+        bounces: "{{steps.compute_metrics.output.emails_failed}}"
+      analytics_data:
+        past_learnings: "{{steps.retrieve_past_learnings.output}}"
+        other_campaigns: "{{steps.other_metrics.output}}"
+    output_var: insights
+
+  - id: update_analytics_cache
+    action: mongodb_upsert
+    input:
+      collection: analytics
+      query: {campaign_id: "{{inputs.campaign_id}}"}
+      doc: "{{steps.compute_metrics.output}}"
+    output_var: cache_update
+
+  - id: store_learning
+    action: mongodb_insert
+    input:
+      collection: analytics_learning_memory
+      document:
+        campaign_id: "{{inputs.campaign_id}}"
+        campaign_name: "{{steps.get_campaign_data.output.name}}"
+        performance_grade: "{{steps.generate_insights.output.summary.performance_grade}}"
+        key_wins: "{{steps.generate_insights.output.summary.top_wins}}"
+        key_concerns: "{{steps.generate_insights.output.summary.top_concerns}}"
+        whats_working: "{{steps.generate_insights.output.whats_working}}"
+        whats_not_working: "{{steps.generate_insights.output.whats_not_working}}"
+        recommendations: "{{steps.generate_insights.output.recommendations}}"
+        campaign_comparison: "{{steps.generate_insights.output.campaign_comparison}}"
+        learning_memory_insights: "{{steps.generate_insights.output.learning_memory_insights}}"
+        analyzed_at: "{{now}}"
+    output_var: learning_record
+
+  - id: update_campaign_memory
+    action: mongodb_upsert
+    input:
+      collection: campaign_memories
+      query: {campaign_id: "{{inputs.campaign_id}}"}
+      doc:
+        campaign_id: "{{inputs.campaign_id}}"
+        strategy: "{{steps.generate_insights.output.summary.overview}}"
+        timestamp: "{{now}}"
+    output_var: memory_update
+
+  - id: index_in_qdrant
+    action: qdrant_upsert
+    input:
+      collection: campaigns
+      doc_id: "{{inputs.campaign_id}}"
+      text: "Campaign {{steps.get_campaign_data.output.name}}: {{steps.generate_insights.output.summary.overview}}"
+      metadata:
+        campaign_id: "{{inputs.campaign_id}}"
+        grade: "{{steps.generate_insights.output.summary.performance_grade}}"
+    output_var: vector_index
+
+outputs:
+  grade: "{{steps.generate_insights.output.summary.performance_grade}}"
+  insights: "{{steps.generate_insights.output}}"
+  recommendations: "{{steps.generate_insights.output.recommendations}}"
+  top_performing_leads: "{{steps.generate_insights.output.top_performing_leads}}"
+
+error_handling:
+  - step: generate_insights
+    on_failure: generate_basic_insights
+    retry_count: 1
+
+generate_basic_insights:
+  - action: compute_basic_insights
+    input:
+      metrics: "{{steps.compute_metrics.output}}"
+      campaign: "{{steps.get_campaign_data.output}}"
+    output_var: basic_insights

@@ -1,0 +1,486 @@
+version: 1.0.0
+tools:
+  apollo_search:
+    name: Apollo Search
+    purpose: Search for leads on Apollo.io by job titles, companies, locations
+    category: lead_discovery
+    api: Apollo.io API
+    authentication: api_key
+    rate_limit:
+      requests_per_minute: 100
+      retry_after: 60
+    input_schema:
+      type: object
+      properties:
+        job_titles:
+          type: array
+          items: {type: string}
+          description: Job titles to search for
+        locations:
+          type: array
+          items: {type: string}
+          description: Geographic locations
+        industry:
+          type: string
+          description: Industry vertical
+        limit:
+          type: integer
+          default: 10
+          maximum: 100
+      required: [job_titles]
+    output_schema:
+      type: object
+      properties:
+        leads:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              title: {type: string}
+              company: {type: string}
+              email: {type: string}
+              linkedin: {type: string}
+              website: {type: string}
+        count: {type: integer}
+        source: {type: string}
+    retry_strategy:
+      max_retries: 2
+      backoff_seconds: 60
+    status_codes:
+      200: success
+      401: invalid_api_key
+      429: rate_limited
+
+  hunter_verify:
+    name: Hunter Email Verification
+    purpose: Verify email deliverability using Hunter.io
+    category: enrichment
+    api: Hunter.io API
+    authentication: api_key
+    rate_limit:
+      requests_per_month: 50
+      retry_after: 60
+    input_schema:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email address to verify
+      required: [email]
+    output_schema:
+      type: object
+      properties:
+        email: {type: string}
+        status: {type: string, enum: [verified, deliverable, undeliverable, unknown]}
+        score: {type: integer, minimum: 0, maximum: 100}
+        deliverable: {type: boolean}
+        reason: {type: string}
+    retry_strategy:
+      max_retries: 1
+      backoff_seconds: 60
+
+  tavily_search:
+    name: Tavily Web Search
+    purpose: Search the web for company research and lead discovery
+    category: research
+    api: Tavily Search API
+    authentication: api_key
+    rate_limit:
+      requests_per_month: 1000
+      retry_after: 60
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Search query
+        max_results:
+          type: integer
+          default: 4
+          maximum: 10
+      required: [query]
+    output_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          url: {type: string}
+          content: {type: string}
+          score: {type: number}
+    retry_strategy:
+      max_retries: 2
+      backoff_seconds: 30
+
+  firecrawl_scrape:
+    name: Firecrawl Web Scraper
+    purpose: Extract markdown content from URLs for research
+    category: research
+    api: Firecrawl API
+    authentication: api_key
+    rate_limit:
+      pages_per_month: 100
+      retry_after: 60
+    input_schema:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL to scrape
+        max_length:
+          type: integer
+          default: 4000
+          maximum: 10000
+      required: [url]
+    output_schema:
+      type: object
+      properties:
+        content: {type: string}
+        source: {type: string}
+        url: {type: string}
+    retry_strategy:
+      max_retries: 2
+      backoff_seconds: 60
+
+  gmail_send:
+    name: Gmail Send
+    purpose: Send emails via Gmail API with OAuth2
+    category: communication
+    api: Google Gmail API
+    authentication: oauth2
+    rate_limit:
+      requests_per_day: 500
+      retry_after: 60
+    input_schema:
+      type: object
+      properties:
+        gmail_account_id:
+          type: string
+          description: Connected Gmail account ID
+        to:
+          type: string
+          format: email
+        subject:
+          type: string
+        body_html:
+          type: string
+        thread_id:
+          type: string
+          description: Optional thread ID for reply threading
+        attachments:
+          type: array
+          items:
+            type: object
+            properties:
+              filename: {type: string}
+              content: {type: string}
+              content_type: {type: string}
+      required: [gmail_account_id, to, subject, body_html]
+    output_schema:
+      type: object
+      properties:
+        gmail_message_id: {type: string}
+        gmail_thread_id: {type: string}
+    retry_strategy:
+      max_retries: 2
+      backoff_seconds: 30
+
+  gmail_check_replies:
+    name: Gmail Reply Check
+    purpose: Poll Gmail for new replies to tracked threads
+    category: monitoring
+    api: Google Gmail API
+    authentication: oauth2
+    rate_limit:
+      requests_per_minute: 60
+    input_schema:
+      type: object
+      properties:
+        gmail_account_id:
+          type: string
+        thread_ids:
+          type: array
+          items: {type: string}
+      required: [gmail_account_id, thread_ids]
+    output_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          thread_id: {type: string}
+          gmail_message_id: {type: string}
+          from: {type: string}
+          subject: {type: string}
+          snippet: {type: string}
+          date: {type: string}
+
+  qdrant_search:
+    name: Qdrant Vector Search
+    purpose: Semantic search across document collections
+    category: memory
+    api: Qdrant REST API
+    authentication: api_key
+    input_schema:
+      type: object
+      properties:
+        collection:
+          type: string
+          enum: [campaigns, leads, emails, replies, signals, company_research]
+        query:
+          type: string
+          description: Semantic search query
+        limit:
+          type: integer
+          default: 3
+          maximum: 10
+        score_threshold:
+          type: number
+          default: 0.3
+      required: [collection, query]
+    output_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: {type: string}
+          text: {type: string}
+          score: {type: number}
+          metadata: {type: object}
+    retry_strategy:
+      max_retries: 3
+      backoff_seconds: 1
+
+  qdrant_upsert:
+    name: Qdrant Vector Storage
+    purpose: Store documents with embeddings in Qdrant
+    category: memory
+    api: Qdrant REST API
+    authentication: api_key
+    input_schema:
+      type: object
+      properties:
+        collection:
+          type: string
+        doc_id:
+          type: string
+        text:
+          type: string
+        metadata:
+          type: object
+      required: [collection, doc_id, text]
+    output_schema:
+      type: object
+      properties:
+        success: {type: boolean}
+
+  mongodb_query:
+    name: MongoDB Query
+    purpose: Query documents from MongoDB collection
+    category: database
+    authentication: connection_string
+    input_schema:
+      type: object
+      properties:
+        collection:
+          type: string
+        query:
+          type: object
+        fields:
+          type: object
+        sort:
+          type: object
+        limit:
+          type: integer
+          default: 50
+      required: [collection, query]
+    output_schema:
+      type: array
+
+  mongodb_insert:
+    name: MongoDB Insert
+    purpose: Insert documents into MongoDB collection
+    category: database
+    authentication: connection_string
+    input_schema:
+      type: object
+      properties:
+        collection:
+          type: string
+        document:
+          type: object
+        documents:
+          type: array
+      required: [collection]
+    output_schema:
+      type: object
+      properties:
+        id: {type: string}
+        inserted_id: {type: string}
+
+  mongodb_update:
+    name: MongoDB Update
+    purpose: Update documents in MongoDB collection
+    category: database
+    authentication: connection_string
+    input_schema:
+      type: object
+      properties:
+        collection:
+          type: string
+        query:
+          type: object
+        update:
+          type: object
+      required: [collection, query, update]
+    output_schema:
+      type: object
+      properties:
+        matched_count: {type: integer}
+        modified_count: {type: integer}
+
+  llm_inference:
+    name: LLM Inference
+    purpose: Generate text using Groq LLM
+    category: ai
+    api: Groq API
+    authentication: api_key
+    rate_limit:
+      requests_per_minute: 60
+    input_schema:
+      type: object
+      properties:
+        model:
+          type: string
+          default: llama-3.3-70b-versatile
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role: {type: string, enum: [system, user, assistant]}
+              content: {type: string}
+        temperature:
+          type: number
+          default: 0.3
+        max_tokens:
+          type: integer
+          default: 2000
+      required: [messages]
+    output_schema:
+      type: object
+      properties:
+        content: {type: string}
+        model: {type: string}
+        usage: {type: object}
+    retry_strategy:
+      max_retries: 2
+      backoff_seconds: 10
+
+  spam_check:
+    name: Email Spam Analysis
+    purpose: Analyze email content for spam triggers and deliverability
+    category: validation
+    input_schema:
+      type: object
+      properties:
+        email_content:
+          type: string
+        subject:
+          type: string
+      required: [email_content]
+    output_schema:
+      type: object
+      properties:
+        spam_score: {type: integer}
+        risk_level: {type: string, enum: [low, medium, high]}
+        triggers: {type: array}
+        deliverability_score: {type: number}
+        suggestions: {type: array}
+
+  webhook_dispatch:
+    name: Webhook Dispatch
+    purpose: Send webhook events to subscribed URLs
+    category: notification
+    input_schema:
+      type: object
+      properties:
+        event_type:
+          type: string
+        campaign_id:
+          type: string
+        data:
+          type: object
+      required: [event_type, campaign_id]
+    output_schema:
+      type: object
+      properties:
+        delivered: {type: boolean}
+        webhook_id: {type: string}
+
+  websocket_broadcast:
+    name: WebSocket Broadcast
+    purpose: Send real-time notifications via WebSocket
+    category: notification
+    input_schema:
+      type: object
+      properties:
+        event:
+          type: string
+        user_id:
+          type: string
+        data:
+          type: object
+      required: [event, user_id]
+    output_schema:
+      type: object
+      properties:
+        delivered: {type: boolean}
+        connection_count: {type: integer}
+
+  linkedin_playwright:
+    name: LinkedIn Playwright Automation
+    purpose: Automate LinkedIn interactions via Playwright browser
+    category: linkedin_outreach
+    api: Playwright Chromium
+    authentication: session_cookies
+    rate_limit:
+      connections_per_day: 20
+      messages_per_day: 50
+      profile_views_per_day: 80
+      min_delay_seconds: 2
+      max_delay_seconds: 5
+    input_schema:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [scrape_profile, send_connection, send_message, send_message_by_name, check_invitations]
+          description: The LinkedIn action to perform
+        linkedin_url:
+          type: string
+          description: Target LinkedIn profile URL (not needed for send_message_by_name)
+        person_name:
+          type: string
+          description: Target person's name for send_message_by_name action
+        message:
+          type: string
+          description: Message or connection note text
+        user_id:
+          type: string
+          description: User ID for session lookup
+      required: [action, user_id]
+    output_schema:
+      type: object
+      properties:
+        success: {type: boolean}
+        data: {type: object}
+        error: {type: string}
+    retry_strategy:
+      max_retries: 1
+      backoff_seconds: 30
+    safety:
+      require_human_approval: true
+      random_delay: true
+      session_validation: true

@@ -1,0 +1,73 @@
+name: LinkedIn Followup Workflow
+description: Generate a follow-up message draft for a LinkedIn contact
+
+version: 1.0.0
+
+agents:
+  - linkedin_followup_agent
+
+skills:
+  - linkedin_generate_followup
+  - linkedin_send_message
+  - linkedin_update_relationship
+
+steps:
+  - id: load_conversation
+    action: mongodb_query
+    input:
+      collection: linkedin_conversations
+      query:
+        user_id: "{{inputs.user_id}}"
+        contact_linkedin_url: "{{inputs.linkedin_url}}"
+      limit: 1
+    output_var: conversation_data
+
+  - id: load_relationship
+    action: mongodb_query_one
+    input:
+      collection: linkedin_relationships
+      query:
+        user_id: "{{inputs.user_id}}"
+        linkedin_url: "{{inputs.linkedin_url}}"
+    output_var: relationship_data
+
+  - id: generate_followup
+    agent: linkedin_followup_agent
+    input:
+      lead_data:
+        name: "{{inputs.lead_name}}"
+        company: "{{inputs.lead_company}}"
+        role: "{{inputs.lead_role}}"
+        linkedin_url: "{{inputs.linkedin_url}}"
+      conversation_history: "{{steps.load_conversation.output}}"
+      relationship_stage: "{{steps.load_relationship.output.current_stage}}"
+      sequence_number: "{{inputs.sequence_number}}"
+    output_var: followup_result
+
+  - id: create_draft
+    action: mongodb_insert
+    input:
+      collection: linkedin_actions
+      document:
+        user_id: "{{inputs.user_id}}"
+        lead_id: "{{inputs.lead_id}}"
+        linkedin_url: "{{inputs.linkedin_url}}"
+        action_type: "followup"
+        status: "pending_approval"
+        message: "{{steps.generate_followup.output.followup_message}}"
+        approach_used: "{{steps.generate_followup.output.approach_used}}"
+        recommended_delay_hours: "{{steps.generate_followup.output.recommended_delay_hours}}"
+        created_at: "{{inputs.timestamp}}"
+    output_var: draft_result
+
+outputs:
+  action_id: "{{steps.create_draft.output.document.id}}"
+  draft_message: "{{steps.generate_followup.output.followup_message}}"
+  recommended_delay_hours: "{{steps.generate_followup.output.recommended_delay_hours}}"
+  approach_used: "{{steps.generate_followup.output.approach_used}}"
+  status: "pending_approval"
+
+error_handling:
+  - step: generate_followup
+    on_failure: log_error
+    retry_count: 1

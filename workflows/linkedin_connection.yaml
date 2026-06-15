@@ -1,0 +1,87 @@
+name: LinkedIn Connection Workflow
+description: Generate and queue a LinkedIn connection request for approval
+
+version: 1.0.0
+
+agents:
+  - linkedin_research_agent
+  - linkedin_personalization_agent
+  - linkedin_message_agent
+
+skills:
+  - linkedin_profile_scrape
+  - linkedin_generate_connection_note
+  - linkedin_send_connection
+  - linkedin_update_relationship
+
+steps:
+  - id: check_daily_limit
+    action: linkedin_check_daily_limit
+    input:
+      user_id: "{{inputs.user_id}}"
+      action_type: "connection"
+    output_var: limit_check
+
+  - id: research_profile
+    agent: linkedin_research_agent
+    input:
+      linkedin_url: "{{inputs.linkedin_url}}"
+      user_id: "{{inputs.user_id}}"
+    output_var: research_result
+
+  - id: generate_note
+    agent: linkedin_message_agent
+    input:
+      lead_data:
+        name: "{{steps.research_profile.output.profile_data.name}}"
+        company: "{{steps.research_profile.output.profile_data.experience.0.company}}"
+        role: "{{steps.research_profile.output.profile_data.headline}}"
+        linkedin_url: "{{inputs.linkedin_url}}"
+      personalization_data: "{{steps.research_profile.output.personalization_data}}"
+      message_type: "connection_note"
+    output_var: connection_note
+
+  - id: create_draft
+    action: mongodb_insert
+    input:
+      collection: linkedin_actions
+      document:
+        id: "{{inputs.action_id}}"
+        user_id: "{{inputs.user_id}}"
+        lead_id: "{{inputs.lead_id}}"
+        linkedin_url: "{{inputs.linkedin_url}}"
+        action_type: "connection_request"
+        status: "pending_approval"
+        message: "{{steps.generate_note.output.message_text}}"
+        profile_data: "{{steps.research_profile.output.profile_data}}"
+        research_data: "{{steps.research_profile.output.research_data}}"
+        created_at: "{{inputs.timestamp}}"
+    output_var: draft_result
+
+  - id: update_relationship
+    action: linkedin_update_relationship
+    input:
+      user_id: "{{inputs.user_id}}"
+      linkedin_url: "{{inputs.linkedin_url}}"
+      new_stage: "profile_viewed"
+      lead_id: "{{inputs.lead_id}}"
+    output_var: relationship_result
+
+outputs:
+  action_id: "{{steps.create_draft.output.document.id}}"
+  draft_message: "{{steps.generate_note.output.message_text}}"
+  profile_data: "{{steps.research_profile.output.profile_data}}"
+  status: "pending_approval"
+
+error_handling:
+  - step: check_daily_limit
+    on_failure: log_error
+    retry_count: 0
+
+  - step: research_profile
+    on_failure: log_error
+    retry_count: 1
+
+  - step: generate_note
+    on_failure: log_error
+    retry_count: 1

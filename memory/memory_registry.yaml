@@ -1,0 +1,296 @@
+version: 1.0.0
+
+memory_stores:
+  lead_memory:
+    description: Per-lead memory storing research history, emails, responses, notes
+    mongodb_collection: lead_memories
+    qdrant_collection: leads
+    indexes:
+      - lead_id
+      - user_id
+      - created_at
+    ttl_days: null
+    permissions:
+      lead_discovery: write
+      signal_intelligence: write
+      personalization_agent: read
+      email_writer: read
+      followup_agent: read
+      reply_monitor_agent: write
+      rag_agent: read_write
+      analytics_agent: read
+
+  campaign_memory:
+    description: Campaign-level strategy and performance summaries
+    mongodb_collection: campaign_memories
+    qdrant_collection: campaigns
+    indexes:
+      - campaign_id
+      - user_id
+    ttl_days: 365
+    permissions:
+      campaign_strategist: read_write
+      research_agent: read
+      personalization_agent: read
+      email_writer: read
+      analytics_agent: read_write
+      rag_agent: read_write
+
+  signal_memory:
+    description: Signal intelligence events and hooks
+    mongodb_collection: signals
+    qdrant_collection: signals
+    indexes:
+      - lead_id
+      - category
+      - score
+      - signal_freshness_score
+    ttl_days: 90
+    permissions:
+      signal_intelligence: write
+      opportunity_agent: read
+      personalization_agent: read
+      rag_agent: read
+
+  analytics_memory:
+    description: AI-generated campaign insights and learning records
+    mongodb_collection: analytics_learning_memory
+    qdrant_collection: null
+    indexes:
+      - campaign_id
+      - performance_grade
+      - analyzed_at
+    ttl_days: 365
+    permissions:
+      analytics_agent: read_write
+      rag_agent: read
+
+  reply_memory:
+    description: Received replies and classifications
+    mongodb_collection: replies
+    qdrant_collection: replies
+    indexes:
+      - campaign_id
+      - lead_id
+      - classification
+      - received_at
+    ttl_days: null
+    permissions:
+      reply_monitor_agent: read_write
+      followup_agent: read
+      analytics_agent: read
+      rag_agent: read_write
+
+  opportunity_memory:
+    description: Opportunity evaluations for leads
+    mongodb_collection: opportunities
+    qdrant_collection: null
+    indexes:
+      - lead_id
+      - urgency
+      - confidence_score
+    ttl_days: 180
+    permissions:
+      opportunity_agent: read_write
+      lead_discovery: read
+
+  linkedin_memory:
+    description: LinkedIn outreach history, conversations, and relationship data
+    mongodb_collection: linkedin_conversations
+    qdrant_collection: linkedin_outreach
+    indexes:
+      - user_id
+      - contact_linkedin_url
+      - last_message_at
+    ttl_days: null
+    permissions:
+      linkedin_research_agent: write
+      linkedin_personalization_agent: read
+      linkedin_message_agent: read
+      linkedin_followup_agent: read
+      linkedin_campaign_agent: read
+      linkedin_analytics_agent: read
+
+agent_permissions:
+  lead_discovery:
+    memory_stores:
+      - lead_memory
+    access_level: write
+    constraints:
+      - can_only_write_own_leads
+
+  signal_intelligence:
+    memory_stores:
+      - signal_memory
+      - lead_memory
+    access_level: write
+    constraints:
+      - can_only_write_own_signals
+
+  opportunity_agent:
+    memory_stores:
+      - opportunity_memory
+      - signal_memory
+    access_level: read_write
+    constraints: []
+
+  research_agent:
+    memory_stores:
+      - lead_memory
+      - campaign_memory
+    access_level: write
+    constraints:
+      - can_only_write_own_leads
+
+  personalization_agent:
+    memory_stores:
+      - lead_memory
+      - campaign_memory
+    access_level: read
+    constraints: []
+
+  email_writer:
+    memory_stores:
+      - lead_memory
+      - campaign_memory
+    access_level: read
+    constraints: []
+
+  followup_agent:
+    memory_stores:
+      - lead_memory
+      - reply_memory
+    access_level: read
+    constraints: []
+
+  reply_monitor_agent:
+    memory_stores:
+      - reply_memory
+      - lead_memory
+    access_level: write
+    constraints:
+      - can_only_write_own_replies
+
+  analytics_agent:
+    memory_stores:
+      - analytics_memory
+      - campaign_memory
+    access_level: read_write
+    constraints:
+      - can_only_read_own_campaigns
+
+  campaign_strategist:
+    memory_stores:
+      - campaign_memory
+    access_level: read_write
+    constraints:
+      - can_only_write_own_campaigns
+
+  rag_agent:
+    memory_stores:
+      - lead_memory
+      - campaign_memory
+      - signal_memory
+      - reply_memory
+      - analytics_memory
+    access_level: read
+    constraints: []
+
+  enrichment_agent:
+    memory_stores:
+      - lead_memory
+    access_level: write
+    constraints:
+      - can_only_write_own_leads
+
+  investor_discovery:
+    memory_stores:
+      - campaign_memory
+    access_level: read
+    constraints: []
+
+  linkedin_research_agent:
+    memory_stores:
+      - lead_memory
+      - linkedin_memory
+    access_level: write
+    constraints:
+      - can_only_write_own_leads
+
+  linkedin_personalization_agent:
+    memory_stores:
+      - lead_memory
+      - linkedin_memory
+      - campaign_memory
+    access_level: read
+    constraints: []
+
+  linkedin_message_agent:
+    memory_stores:
+      - lead_memory
+      - linkedin_memory
+    access_level: read
+    constraints: []
+
+  linkedin_followup_agent:
+    memory_stores:
+      - lead_memory
+      - linkedin_memory
+    access_level: read
+    constraints: []
+
+  linkedin_campaign_agent:
+    memory_stores:
+      - campaign_memory
+      - lead_memory
+      - linkedin_memory
+    access_level: read
+    constraints: []
+
+  linkedin_analytics_agent:
+    memory_stores:
+      - analytics_memory
+      - linkedin_memory
+      - campaign_memory
+    access_level: read_write
+    constraints:
+      - can_only_read_own_campaigns
+
+rag_config:
+  embedding_model: BAAI/bge-small-en-v1.5
+  embedding_dimension: 384
+  collection_config:
+    campaigns:
+      vectors: 384
+    leads:
+      vectors: 384
+    emails:
+      vectors: 384
+    replies:
+      vectors: 384
+    signals:
+      vectors: 384
+    company_research:
+      vectors: 384
+    linkedin_outreach:
+      vectors: 384
+
+  ranking_formula:
+    similarity_weight: 0.5
+    recency_weight: 0.3
+    campaign_match_weight: 0.2
+    recency_decay_rate: 0.01
+
+  retrieval_defaults:
+    limit: 3
+    score_threshold: 0.3
+    enable_hybrid: true
+    hybrid_alpha: 0.7
+
+context_window:
+  max_context_items: 10
+  max_context_age_days: 30
+  context_inclusion_rules:
+    - include_high_similarity
+    - include_recent_high_engagement
+    - exclude_unsubscribed

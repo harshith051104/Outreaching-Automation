@@ -1,0 +1,84 @@
+name: Lead Discovery Workflow
+description: Orchestrates lead search, enrichment, deduplication, and storage
+
+version: 1.0.0
+
+agents:
+  - lead_discovery
+  - enrichment_agent
+
+skills:
+  - apollo_search
+  - hunter_verification
+  - web_scraping
+  - lead_quality_scoring
+
+steps:
+  - id: search_leads
+    agent: lead_discovery
+    input:
+      job_titles: "{{inputs.job_titles}}"
+      locations: "{{inputs.locations}}"
+      industry: "{{inputs.industry}}"
+      limit: "{{inputs.limit}}"
+    output_var: raw_leads
+
+  - id: check_duplicates
+    action: deduplicate
+    input:
+      leads: "{{steps.search_leads.output.leads}}"
+      campaign_id: "{{inputs.campaign_id}}"
+    output_var: unique_leads
+
+  - id: verify_emails
+    parallel: true
+    foreach: "{{steps.check_duplicates.output.unique_leads}}"
+    agent: enrichment_agent
+    input:
+      email: "{{item.email}}"
+    output_var: verified_leads
+
+  - id: score_leads
+    action: calculate_quality_score
+    input:
+      leads: "{{steps.verify_emails.output.verified_leads}}"
+      job_titles: "{{inputs.job_titles}}"
+    output_var: scored_leads
+
+  - id: store_leads
+    action: mongodb_insert
+    input:
+      collection: leads
+      documents: "{{steps.score_leads.output.scored_leads}}"
+    output_var: stored_results
+
+  - id: index_vectors
+    action: qdrant_upsert
+    input:
+      collection: leads
+      documents: "{{steps.score_leads.output.scored_leads}}"
+    output_var: vector_results
+
+outputs:
+  lead_count: "{{steps.store_leads.output.count}}"
+  leads: "{{steps.store_leads.output.documents}}"
+  source: "{{steps.search_leads.output.source}}"
+
+error_handling:
+  - step: search_leads
+    on_failure: fallback_tavily
+    retry_count: 2
+
+  - step: verify_emails
+    on_failure: skip_verification
+    continue_on_error: true
+
+fallback_tavily:
+  - action: tavily_search
+    input:
+      query: "{{inputs.query}}"
+    output_var: tavily_results
+  - action: transform_tavily_to_leads
+    input:
+      results: "{{fallback_tavily.tavily_results}}"
+    output_var: fallback_leads

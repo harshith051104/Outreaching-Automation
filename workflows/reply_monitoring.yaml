@@ -1,0 +1,137 @@
+name: Reply Monitoring Workflow
+description: Poll Gmail for replies, classify, notify, and trigger follow-ups
+
+version: 1.0.0
+
+agents:
+  - reply_monitor_agent
+
+skills:
+  - reply_classification
+  - rag_retrieval
+
+steps:
+  - id: poll_campaigns
+    action: find_active_campaigns
+    input:
+      query: {status: "active", gmail_account_id: {$ne: ""}}
+      limit: 50
+    output_var: active_campaigns
+
+  - id: process_each_campaign
+    foreach: "{{steps.poll_campaigns.output.active_campaigns}}"
+    parallel: true
+    max_parallel: 5
+
+    steps:
+      - id: get_email_threads
+        action: mongodb_query
+        input:
+          collection: emails
+          query:
+            campaign_id: "{{item.id}}"
+            status: sent
+            gmail_thread_id: {$ne: null}
+          fields: [gmail_thread_id]
+        output_var: threads
+
+      - id: check_gmail_replies
+        action: gmail_check_replies
+        input:
+          gmail_account_id: "{{item.gmail_account_id}}"
+          thread_ids: "{{steps.get_email_threads.output.thread_ids}}"
+        output_var: replies
+
+      - id: process_each_reply
+        foreach: "{{steps.check_gmail_replies.output.replies}}"
+        steps:
+          - id: record_reply
+            action: mongodb_insert
+            input:
+              collection: replies
+              document:
+                email_id: "{{steps.get_email_threads.output.emails[0].id}}"
+                campaign_id: "{{item.id}}"
+                gmail_message_id: "{{reply_item.gmail_message_id}}"
+                from_email: "{{reply_item.from}}"
+                subject: "{{reply_item.subject}}"
+                snippet: "{{reply_item.snippet}}"
+                received_at: "{{now}}"
+            output_var: reply_record
+
+          - id: classify_reply
+            agent: reply_monitor_agent
+            input:
+              reply_text: "{{reply_item.snippet}}"
+              original_email: "{{reply_item.original_subject}}"
+              lead_context:
+                name: "{{reply_item.lead_name}}"
+                company: "{{reply_item.lead_company}}"
+                role: "{{reply_item.lead_role}}"
+                lead_score: "{{reply_item.lead_score}}"
+            output_var: classification
+
+          - id: update_reply
+            action: mongodb_update
+            input:
+              collection: replies
+              query: {id: "{{steps.record_reply.output.id}}"}
+              update:
+                classification: "{{steps.classify_reply.output.classification}}"
+                sentiment: "{{steps.classify_reply.output.sentiment}}"
+                lead_score_delta: "{{steps.classify_reply.output.lead_score_delta}}"
+            output_var: update_result
+
+          - id: update_lead_score
+            action: mongodb_update
+            input:
+              collection: leads
+              query: {id: "{{reply_item.lead_id}}"}
+              update:
+                $inc: {engagement_score: "{{steps.classify_reply.output.lead_score_delta}}"}
+            output_var: score_result
+
+          - id: cancel_pending_followups
+            action: mongodb_update
+            input:
+              collection: followup_tasks
+              query: {lead_id: "{{reply_item.lead_id}}", status: pending}
+              update: {status: cancelled}
+            output_var: cancel_result
+
+          - id: websocket_notify
+            action: websocket_broadcast
+            input:
+              event: new_reply
+              user_id: "{{item.user_id}}"
+              data:
+                reply_id: "{{steps.record_reply.output.id}}"
+                campaign_id: "{{item.id}}"
+                from_email: "{{reply_item.from}}"
+                subject: "{{reply_item.subject}}"
+                snippet: "{{reply_item.snippet}}"
+                received_at: "{{now}}"
+            output_var: notify_result
+
+outputs:
+  campaigns_polled: "{{steps.poll_campaigns.output.count}}"
+  total_replies: "{{steps.check_gmail_replies.output.count}}"
+
+error_handling:
+  - step: check_gmail_replies
+    on_failure: log_error
+    continue_on_error: true
+
+  - step: classify_reply
+    on_failure: set_default_classification
+    continue_on_error: true
+
+set_default_classification:
+  - action: mongodb_update
+    input:
+      collection: replies
+      query: {id: "{{steps.record_reply.output.id}}"}
+      update:
+        classification: follow_up_later
+        sentiment: neutral
+        confidence_score: 0.3

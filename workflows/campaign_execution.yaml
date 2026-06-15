@@ -1,0 +1,168 @@
+name: Campaign Execution Workflow
+description: Full campaign execution - research, personalize, write, send, follow-up
+
+version: 1.0.0
+
+agents:
+  - research_agent
+  - personalization_agent
+  - email_writer
+  - followup_agent
+
+skills:
+  - web_scraping
+  - email_generation
+  - followup_generation
+  - rag_retrieval
+  - campaign_analysis
+
+steps:
+  - id: check_context
+    action: conditional
+    input:
+      condition: "{{inputs.has_research_data}}"
+      true_branch: use_existing_research
+      false_branch: perform_research
+
+  - id: perform_research
+    agent: research_agent
+    input:
+      name: "{{inputs.lead.name}}"
+      email: "{{inputs.lead.email}}"
+      company: "{{inputs.lead.company}}"
+      role: "{{inputs.lead.role}}"
+      website: "{{inputs.lead.website}}"
+    output_var: research_data
+
+  - id: use_existing_research
+    action: pass_through
+    input:
+      data: "{{inputs.research_data}}"
+    output_var: research_data
+
+  - id: retrieve_memories
+    action: rag_search
+    input:
+      collection: emails
+      query: "successful {{inputs.tone}} outreach {{inputs.lead.company}}"
+      limit: 3
+      current_campaign_id: "{{inputs.campaign_id}}"
+    output_var: memory_context
+
+  - id: personalize
+    agent: personalization_agent
+    input:
+      name: "{{inputs.lead.name}}"
+      company: "{{inputs.lead.company}}"
+      role: "{{inputs.lead.role}}"
+      email: "{{inputs.lead.email}}"
+      research_data: "{{steps.retrieve_memories.output.results}}"
+    output_var: personalization_data
+
+  - id: write_email
+    agent: email_writer
+    input:
+      lead_data:
+        name: "{{inputs.lead.name}}"
+        company: "{{inputs.lead.company}}"
+        role: "{{inputs.lead.role}}"
+      personalization_data: "{{steps.personalize.output}}"
+      tone: "{{inputs.tone}}"
+    output_var: email_content
+
+  - id: validate_spam
+    action: spam_check
+    input:
+      email_content: "{{steps.write_email.output}}"
+    output_var: spam_result
+
+  - id: revise_if_spam
+    action: conditional
+    input:
+      condition: "{{steps.validate_spam.output.spam_score}} > 15"
+      true_branch: revise_email
+      false_branch: proceed_send
+
+  - id: revise_email
+    agent: email_writer
+    input:
+      lead_data:
+        name: "{{inputs.lead.name}}"
+        company: "{{inputs.lead.company}}"
+        role: "{{inputs.lead.role}}"
+      personalization_data: "{{steps.personalize.output}}"
+      tone: "{{inputs.tone}}"
+      revision_note: "Revise due to spam score > 15"
+    output_var: revised_email
+
+  - id: proceed_send
+    action: pass_through
+    input:
+      data: "{{steps.write_email.output}}"
+    output_var: final_email
+
+  - id: create_email_record
+    action: mongodb_insert
+    input:
+      collection: emails
+      document:
+        campaign_id: "{{inputs.campaign_id}}"
+        lead_id: "{{inputs.lead.id}}"
+        subject: "{{steps.proceed_send.output.subject}}"
+        body_html: "{{steps.proceed_send.output.body_html}}"
+        tracking_id: "{{inputs.tracking_id}}"
+    output_var: email_record
+
+  - id: send_via_gmail
+    action: gmail_send
+    input:
+      gmail_account_id: "{{inputs.gmail_account_id}}"
+      to: "{{inputs.lead.email}}"
+      subject: "{{steps.proceed_send.output.subject}}"
+      body_html: "{{steps.proceed_send.output.body_html}}"
+    output_var: send_result
+
+  - id: update_lead_status
+    action: mongodb_update
+    input:
+      collection: leads
+      query: {id: "{{inputs.lead.id}}"}
+      update: {status: "contacted"}
+    output_var: update_result
+
+  - id: store_memory
+    action: mongodb_insert
+    input:
+      collection: lead_memories
+      document:
+        lead_id: "{{inputs.lead.id}}"
+        emails_sent: ["{{steps.proceed_send.output}}"]
+    output_var: memory_result
+
+  - id: schedule_followups
+    action: create_followup_tasks
+    input:
+      campaign_id: "{{inputs.campaign_id}}"
+      lead_id: "{{inputs.lead.id}}"
+      email_id: "{{steps.create_email_record.output.id}}"
+      followup_stages: "{{inputs.followup_stages}}"
+      followup_delay_days: "{{inputs.followup_delay_days}}"
+    output_var: followup_result
+
+outputs:
+  email_id: "{{steps.create_email_record.output.id}}"
+  subject: "{{steps.proceed_send.output.subject}}"
+  status: sent
+  followups_scheduled: "{{steps.schedule_followups.output.count}}"
+
+error_handling:
+  - step: send_via_gmail
+    on_failure: mark_failed
+    retry_count: 2
+
+mark_failed:
+  - action: mongodb_update
+    input:
+      collection: emails
+      query: {id: "{{steps.create_email_record.output.id}}"}
+      update: {status: "failed", error: "{{error}}"}

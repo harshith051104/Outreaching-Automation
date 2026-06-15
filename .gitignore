@@ -1,0 +1,54 @@
+# Environment and Secrets
+.env
+.env.local
+.env.*
+*.env
+secrets.json
+
+# Frontend Dependencies & Build Caches
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+frontend/.tsbuildinfo
+
+# Python Caches & Environments
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+.venv/
+venv/
+ENV/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Logs and Debugging
+*.log
+*.lock
+backend_err.log
+backend_out.log
+error_traceback.txt
+test.py
+test_*.py
+scratch/
+scratch_copy.py
+storage/
+
+
+# IDEs and System Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Agent and Graphify Workspace Caches
+graphify-out/
+.agents/
+.claude/
