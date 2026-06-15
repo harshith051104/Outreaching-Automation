@@ -1,9 +1,17 @@
 import axios from "axios";
 
+let ssrBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+if (ssrBaseUrl.endsWith("/")) {
+  ssrBaseUrl = ssrBaseUrl.slice(0, -1);
+}
+if (!ssrBaseUrl.endsWith("/api") && !ssrBaseUrl.includes("/api/")) {
+  ssrBaseUrl = `${ssrBaseUrl}/api`;
+}
+
 const api = axios.create({
   baseURL: typeof window !== "undefined"
     ? "/api"  // relative path — works through same-origin proxy (ngrok) and in production
-    : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api"),  // SSR fallback
+    : ssrBaseUrl,  // SSR fallback
   headers: {
     "Content-Type": "application/json",
   },

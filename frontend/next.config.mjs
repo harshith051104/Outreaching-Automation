@@ -1,7 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+    let apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+    if (apiUrl.endsWith("/")) {
+      apiUrl = apiUrl.slice(0, -1);
+    }
+    // If NEXT_PUBLIC_API_URL was set to backend root URL (no /api suffix), add it if not present
+    if (!apiUrl.endsWith("/api") && !apiUrl.includes("/api/")) {
+      apiUrl = `${apiUrl}/api`;
+    }
     return [
       {
         source: "/api/:path*",
