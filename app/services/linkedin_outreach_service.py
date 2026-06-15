@@ -1052,6 +1052,12 @@ async def _follow_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
             logger.info("Page layout detected as visible for follow")
         except Exception as e:
             logger.warning("Timed out waiting for layout elements: %s", e)
+            scr_path = await _take_playwright_screenshot(page, "follow_layout_timeout")
+            return {
+                "success": False,
+                "error": "Failed to load LinkedIn profile page layout for follow (possibly due to session expiry or bot challenge).",
+                "error_screenshot_path": scr_path
+            }
 
         # Check if we are logged in / redirected to login
         current_url = page.url
@@ -1359,6 +1365,12 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             logger.info("Profile page layout detected as visible")
         except Exception as e:
             logger.warning("Timed out waiting for profile layout elements: %s", e)
+            scr_path = await _take_playwright_screenshot(page, "profile_layout_timeout")
+            return {
+                "success": False,
+                "error": "Failed to load LinkedIn profile page layout (possibly due to session expiry or bot challenge).",
+                "error_screenshot_path": scr_path
+            }
 
         # Check if we are logged in / redirected to login
         current_url = page.url
@@ -1762,6 +1774,12 @@ async def _send_message_pw(linkedin_url: str, message: str, cookies: List[Dict[s
             logger.info("Profile page layout detected as visible for messaging")
         except Exception as e:
             logger.warning("Timed out waiting for profile layout elements for messaging: %s", e)
+            scr_path = await _take_playwright_screenshot(page, "message_layout_timeout")
+            return {
+                "success": False,
+                "error": "Failed to load LinkedIn profile page layout for messaging (possibly due to session expiry or bot challenge).",
+                "error_screenshot_path": scr_path
+            }
 
         # Check if we are logged in / redirected to login
         current_url = page.url
@@ -2459,12 +2477,12 @@ async def _send_message_by_name_pw(person_name: str, message: str, cookies: List
         for selector in send_btn_selectors:
             try:
                 loc = page.locator(selector).first
-                if await loc.is_visible(timeout=4000):
-                    await _random_delay(0.3, 0.7)
-                    await loc.click(timeout=5000)
-                    send_clicked = True
-                    logger.info("Send button clicked using selector: %s", selector)
-                    break
+                await loc.wait_for(state="visible", timeout=4000)
+                await _random_delay(0.3, 0.7)
+                await loc.click(timeout=5000)
+                send_clicked = True
+                logger.info("Send button clicked using selector: %s", selector)
+                break
             except Exception:
                 continue
 
