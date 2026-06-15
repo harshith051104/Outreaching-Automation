@@ -268,6 +268,18 @@ def create_app() -> FastAPI:
         pass
 
     @app.middleware("http")
+    async def clean_double_slashes(request: Request, call_next):
+        path = request.scope.get("path", "")
+        if "//" in path:
+            cleaned = path
+            while "//" in cleaned:
+                cleaned = cleaned.replace("//", "/")
+            request.scope["path"] = cleaned
+            if "raw_path" in request.scope:
+                request.scope["raw_path"] = cleaned.encode("utf-8")
+        return await call_next(request)
+
+    @app.middleware("http")
     async def add_no_cache_header(request: Request, call_next):
         response = await call_next(request)
         if request.url.path.startswith("/api"):
