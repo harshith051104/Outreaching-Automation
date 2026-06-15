@@ -1289,7 +1289,7 @@ export default function FlowBuilderPage() {
                               placeholder="Hi {{first_name}},&#10;&#10;Loved your profile at {{company}}..."
                               className="w-full px-3 py-2 rounded-lg bg-[#14112c] border border-[#2d2554] text-xs text-white focus:border-[#7c5cff] focus:outline-none font-mono"
                             />
-                            <span className="text-[10px] text-zinc-500">Supports templates: `{{first_name}}`, `{{company}}`, `{{role}}`</span>
+                            <span className="text-[10px] text-zinc-500">{"Supports templates: `{{first_name}}`, `{{company}}`, `{{role}}`"}</span>
                           </div>
                         </>
                       )}
