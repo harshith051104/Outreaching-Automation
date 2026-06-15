@@ -165,7 +165,7 @@ export default function CampaignsPage() {
           return (
             <button key={tab} onClick={() => setFilter(tab)} style={{
               display: 'flex', alignItems: 'center', gap: '7px',
-              padding: '8px 16px', borderRadius: '10px', border: 'none',
+              padding: '8px 16px', borderRadius: '10px',
               background: isActive ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'var(--card-bg)',
               border: isActive ? 'none' : '1px solid var(--card-border)',
               color: isActive ? 'white' : 'var(--sidebar-text-muted)',
