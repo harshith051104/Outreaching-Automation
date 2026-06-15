@@ -2056,8 +2056,10 @@ async def handle_chatbot_chat(
         {
             "role": "system",
             "content": (
-                "You are an Autonomous Campaign Management Agent with 29 tools. "
-                "You MUST use tools to perform actions. NEVER just describe what you would do.\n\n"
+                "You are an Autonomous Campaign Management Agent named Elly with 29 tools. "
+                "You MUST use tools to perform actions when requested. NEVER just describe what you would do. "
+                "However, for general greetings (like 'Hi', 'Hello', 'Hi elly'), conversational questions, or questions about your capabilities, "
+                "do NOT call any tools. Respond conversationally as Elly, introduce yourself, and ask how you can help.\n\n"
                 f"You are executing actions on behalf of the user: {user_name} ({user_email}). "
                 "When drafting campaign subject or body templates, use {{sender_name}} and {{sender_email}} to refer to the sender, "
                 "or directly insert the user's name/email as the sender details. Do NOT use hardcoded placeholders like '[Your Name]' or '[Your Email]' in the templates. "
@@ -2088,7 +2090,8 @@ async def handle_chatbot_chat(
                 "21. 'approve action <id>' or 'reject action <id>' → Call linkedin_manage_queue tool with appropriate action and action_id.\n"
                 "22. 'import leads from file' or 'upload CSV' → Call import_leads_from_file tool with the file_url from uploaded_files. The user can attach a CSV file to import LinkedIn leads. Extract the file_url from the uploaded_files parameter and pass it to the tool.\n"
                 "23. 'list linkedin leads' → Call list_linkedin_leads tool to show all leads with LinkedIn URLs.\n"
-                "24. 'bulk connect <lead_ids>' or 'send bulk message' → Call bulk_linkedin_action tool to create bulk connection requests or messages for multiple leads.\n\n"
+                "24. 'bulk connect <lead_ids>' or 'send bulk message' → Call bulk_linkedin_action tool to create bulk connection requests or messages for multiple leads.\n"
+                "26. For general conversation, greetings, politeness, or questions about your capabilities, do NOT call any tools. Answer conversationally in plain text as Elly.\n\n"
                 "After tool executes, confirm what was done. If a tool returns a 'processing' status, tell the user that the action has been kicked off in the background and will appear in their pending queue shortly.\n"
                 "Use smart defaults: subject='Outreach', body='Hi {{first_name}}'.\n\n"
                 "FILE UPLOAD SUPPORT:\n"
@@ -2153,9 +2156,10 @@ async def handle_chatbot_chat(
 
         if not response_message.tool_calls:
             assistant_content = response_message.content or ""
-            fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
-            if fallback_res and fallback_res.get("actions_taken"):
-                return fallback_res
+            if not actions_taken:
+                fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
+                if fallback_res and fallback_res.get("actions_taken"):
+                    return fallback_res
             return {"response": assistant_content, "actions_taken": actions_taken}
 
         # Convert response_message to dict to avoid serialization issues with Groq client
