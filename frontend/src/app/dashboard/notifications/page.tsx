@@ -161,12 +161,11 @@ export default function NotificationsPage() {
         </div>
       ) : (
         <div
-          className="rounded-2xl border overflow-hidden divide-y"
+          className="rounded-2xl border overflow-hidden divide-y divide-[var(--card-border)]"
           style={{
             background: "var(--card-bg)",
             borderColor: "var(--card-border)",
             boxShadow: "var(--card-shadow)",
-            divideColor: "var(--card-border)",
           }}
         >
           {notifications.map((notif) => (

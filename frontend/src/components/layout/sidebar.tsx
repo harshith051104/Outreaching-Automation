@@ -34,6 +34,19 @@ import { getMonitorStats } from "@/services/monitor-api";
 import { getUnreadNotificationsCount } from "@/services/task-api";
 import { useEffect } from "react";
 
+interface NavItem {
+  href: string;
+  label: string;
+  icon: any;
+  badgeCount?: number;
+  badge?: string;
+}
+
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
@@ -82,7 +95,7 @@ export default function Sidebar() {
     return () => clearInterval(interval);
   }, []);
 
-  const navGroups = [
+  const navGroups: NavGroup[] = [
     {
       label: "Overview",
       items: [

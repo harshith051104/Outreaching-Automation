@@ -114,7 +114,7 @@ export default function ScreenshotCapture({
         height: document.documentElement.clientHeight,
         scrollX: 0,
         scrollY: 0,
-        ignoreElements: (element) => {
+        ignoreElements: (element: Element) => {
           return (
             element.id === "global-feedback-widget" ||
             element.id === "quick-suggestion-modal"
@@ -188,7 +188,7 @@ export default function ScreenshotCapture({
         height: document.documentElement.clientHeight,
         scrollX: 0,
         scrollY: 0,
-        ignoreElements: (element) => {
+        ignoreElements: (element: Element) => {
           return (
             element.id === "global-feedback-widget" ||
             element.id === "quick-suggestion-modal"
