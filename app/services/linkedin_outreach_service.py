@@ -558,6 +558,8 @@ async def _validate_session_pw(cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
             await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=15000)
         except Exception as e:
             logger.warning("page.goto feed timed out, checking URL anyway: %s", e)
+        
+        logger.info("Session validation landed on URL: %s", page.url)
         is_valid = "feed" in page.url and "login" not in page.url
         
         account_name = None
