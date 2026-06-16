@@ -572,6 +572,28 @@ async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
         if "login" in current_url or "signup" in current_url or "checkpoint" in current_url:
             return {"error": "Session expired or invalid. Please reconnect your LinkedIn account."}
 
+        # Check if we were redirected away from the personal profile page (e.g., to the feed page /feed/)
+        if "/in/" not in current_url:
+            logger.warning("Scraper redirected away from profile page. Current URL: %s", current_url)
+            scr_path = ""
+            try:
+                scr_path = await _take_playwright_screenshot(page, "redirect_failed")
+            except Exception:
+                pass
+            return {
+                "error": f"LinkedIn session restricted or redirected away from the profile page. Please verify your LinkedIn session is active (Current URL: {current_url}).",
+                "error_screenshot_path": scr_path,
+                "name": "Unknown",
+                "headline": "",
+                "about": "",
+                "location": "",
+                "experience": [],
+                "education": [],
+                "skills": [],
+                "connection_count": "",
+                "profile_url": linkedin_url
+            }
+
         try:
             global_nav = await page.query_selector("#global-nav, .global-nav")
             if not global_nav:
@@ -798,7 +820,29 @@ async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
         profile_data["connection_count"] = ""
         profile_data["profile_url"] = linkedin_url
 
-        logger.info("Successfully scraped profile: %s", profile_data.get("name", "Unknown"))
+        name = profile_data.get("name", "").strip()
+        if not name or name in ("Unknown", "Feed detail update"):
+            logger.warning("Scraped name is invalid: %s", name)
+            scr_path = ""
+            try:
+                scr_path = await _take_playwright_screenshot(page, "invalid_name")
+            except Exception:
+                pass
+            return {
+                "error": f"Failed to extract a valid name from the profile page (resolved to: '{name}'). Page layout might have changed or rendering failed.",
+                "error_screenshot_path": scr_path,
+                "name": name or "Unknown",
+                "headline": profile_data.get("headline", ""),
+                "about": profile_data.get("about", ""),
+                "location": profile_data.get("location", ""),
+                "experience": [],
+                "education": [],
+                "skills": [],
+                "connection_count": "",
+                "profile_url": linkedin_url
+            }
+
+        logger.info("Successfully scraped profile: %s", name)
         return profile_data
 
     except Exception as exc:
@@ -1052,12 +1096,6 @@ async def _follow_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
             logger.info("Page layout detected as visible for follow")
         except Exception as e:
             logger.warning("Timed out waiting for layout elements: %s", e)
-            scr_path = await _take_playwright_screenshot(page, "follow_layout_timeout")
-            return {
-                "success": False,
-                "error": "Failed to load LinkedIn profile page layout for follow (possibly due to session expiry or bot challenge).",
-                "error_screenshot_path": scr_path
-            }
 
         # Check if we are logged in / redirected to login
         current_url = page.url
@@ -1365,12 +1403,6 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             logger.info("Profile page layout detected as visible")
         except Exception as e:
             logger.warning("Timed out waiting for profile layout elements: %s", e)
-            scr_path = await _take_playwright_screenshot(page, "profile_layout_timeout")
-            return {
-                "success": False,
-                "error": "Failed to load LinkedIn profile page layout (possibly due to session expiry or bot challenge).",
-                "error_screenshot_path": scr_path
-            }
 
         # Check if we are logged in / redirected to login
         current_url = page.url
@@ -1774,12 +1806,6 @@ async def _send_message_pw(linkedin_url: str, message: str, cookies: List[Dict[s
             logger.info("Profile page layout detected as visible for messaging")
         except Exception as e:
             logger.warning("Timed out waiting for profile layout elements for messaging: %s", e)
-            scr_path = await _take_playwright_screenshot(page, "message_layout_timeout")
-            return {
-                "success": False,
-                "error": "Failed to load LinkedIn profile page layout for messaging (possibly due to session expiry or bot challenge).",
-                "error_screenshot_path": scr_path
-            }
 
         # Check if we are logged in / redirected to login
         current_url = page.url
@@ -2477,12 +2503,12 @@ async def _send_message_by_name_pw(person_name: str, message: str, cookies: List
         for selector in send_btn_selectors:
             try:
                 loc = page.locator(selector).first
-                await loc.wait_for(state="visible", timeout=4000)
-                await _random_delay(0.3, 0.7)
-                await loc.click(timeout=5000)
-                send_clicked = True
-                logger.info("Send button clicked using selector: %s", selector)
-                break
+                if await loc.is_visible(timeout=4000):
+                    await _random_delay(0.3, 0.7)
+                    await loc.click(timeout=5000)
+                    send_clicked = True
+                    logger.info("Send button clicked using selector: %s", selector)
+                    break
             except Exception:
                 continue
 
