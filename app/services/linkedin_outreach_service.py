@@ -335,6 +335,11 @@ async def run_linkedin_action_in_subprocess(
     """Runs a LinkedIn Playwright action in a separate Python process to prevent event loop crashes on Windows."""
     import sys
     import subprocess
+    import os
+
+    # Calculate project root dynamically to ensure python can import 'app' module
+    current_file_path = os.path.abspath(__file__)
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
 
     action_timeouts = {
         "send_message": 60,
@@ -356,8 +361,16 @@ async def run_linkedin_action_in_subprocess(
         if message:
             cmd.extend(["--message", message])
             
-        logger.info(f"Spawning child process for LinkedIn action '{action}': {' '.join(cmd)}")
+        logger.info(f"Spawning child process for LinkedIn action '{action}' from directory '{project_root}': {' '.join(cmd)}")
         
+        # Copy current environment to pass PATH, virtualenv, and other config variables
+        env = os.environ.copy()
+        # Add project_root to PYTHONPATH just in case
+        if "PYTHONPATH" in env:
+            env["PYTHONPATH"] = project_root + os.pathsep + env["PYTHONPATH"]
+        else:
+            env["PYTHONPATH"] = project_root
+
         try:
             process = subprocess.Popen(
                 cmd,
@@ -366,6 +379,8 @@ async def run_linkedin_action_in_subprocess(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                cwd=project_root,
+                env=env,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
             )
             try:
@@ -388,36 +403,73 @@ async def run_linkedin_action_in_subprocess(
         
         if res.returncode != 0:
             logger.error(f"Subprocess failed with code {res.returncode}. Stderr: {res.stderr}")
+            err_msg = f"Process error (exit code {res.returncode}): {res.stderr.strip()[:500]}"
             return {
                 "success": False,
-                "error": f"Process error (exit code {res.returncode}): {res.stderr.strip()[:500]}"
+                "status": "error",
+                "error": err_msg,
+                "message": err_msg
             }
             
         stdout = res.stdout.strip()
         if not stdout:
-            return {"success": False, "error": "Empty response from subprocess"}
-            
-        marker = "__RESULT__="
-        if marker in stdout:
-            json_str = stdout.split(marker)[1].strip()
-        else:
-            json_str = stdout
-            
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse subprocess JSON output: {e}. Output was: {stdout[:500]}")
+            err_msg = f"Empty response from subprocess. Stderr: {res.stderr.strip()[:500]}"
             return {
                 "success": False,
-                "error": f"Invalid response from subprocess: {stdout[:200]}"
+                "status": "error",
+                "error": err_msg,
+                "message": err_msg
+            }
+            
+        marker = "__RESULT__="
+        json_str = None
+        for line in stdout.splitlines():
+            if line.startswith(marker):
+                json_str = line[len(marker):].strip()
+                break
+        if not json_str:
+            if marker in stdout:
+                json_str = stdout.split(marker)[1].strip()
+            else:
+                json_str = stdout
+            
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, dict) and "status" not in parsed:
+                if parsed.get("success") is True:
+                    parsed["status"] = "connected"
+                elif parsed.get("success") is False:
+                    parsed["status"] = "error"
+                    parsed["message"] = parsed.get("error", "Failed to execute LinkedIn action.")
+            return parsed
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse subprocess JSON output: {e}. Output was: {stdout[:500]}")
+            err_msg = f"Invalid response from subprocess: {stdout[:200]}"
+            return {
+                "success": False,
+                "status": "error",
+                "error": err_msg,
+                "message": err_msg
             }
             
     except asyncio.TimeoutError:
         logger.error(f"Async wait timeout for action '{action}'")
-        return {"success": False, "error": f"Request timeout after {timeout_seconds}s"}
+        err_msg = f"Request timeout after {timeout_seconds}s"
+        return {
+            "success": False,
+            "status": "error",
+            "error": err_msg,
+            "message": err_msg
+        }
     except Exception as e:
         logger.exception(f"Exception running LinkedIn subprocess action '{action}'")
-        return {"success": False, "error": str(e)}
+        err_msg = str(e)
+        return {
+            "success": False,
+            "status": "error",
+            "error": err_msg,
+            "message": err_msg
+        }
 
 
 async def start_session(user_id: str) -> Dict[str, Any]:
@@ -430,6 +482,65 @@ async def start_session(user_id: str) -> Dict[str, Any]:
         action="start_session",
         user_id=user_id
     )
+
+
+async def import_session_with_cookies(user_id: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Import external LinkedIn cookies, validate them via headless Playwright,
+    and if valid, encrypt and save them in the database.
+    """
+    logger.info("Importing and validating LinkedIn session cookies for user %s", user_id)
+    
+    # 1. Validate cookies using _validate_session_pw (which runs headlessly)
+    val_res = await _validate_session_pw(cookies)
+    is_valid = val_res.get("valid", False)
+    
+    if not is_valid:
+        logger.warning("Imported cookies for user %s are invalid or expired", user_id)
+        return {
+            "status": "error",
+            "message": "Validation failed: Pasted cookies are invalid or expired. Please export fresh cookies and try again."
+        }
+        
+    # 2. Encrypt and save cookies
+    try:
+        from app.config.mongodb_config import get_database
+        cookies_json = json.dumps(cookies)
+        encrypted_cookies = _encrypt_cookies(cookies_json)
+        
+        db = await get_database()
+        now = datetime.now(timezone.utc)
+        update_fields = {
+            "user_id": user_id,
+            "cookies_encrypted": encrypted_cookies,
+            "status": "connected",
+            "last_validated_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        if val_res.get("account_name"):
+            update_fields["account_name"] = val_res["account_name"]
+        if val_res.get("avatar_url"):
+            update_fields["avatar_url"] = val_res["avatar_url"]
+            
+        await db.linkedin_sessions.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+            upsert=True
+        )
+        logger.info("Successfully imported and saved LinkedIn session for user %s", user_id)
+        return {
+            "status": "connected",
+            "message": "LinkedIn session imported successfully.",
+            "account_name": val_res.get("account_name"),
+            "avatar_url": val_res.get("avatar_url")
+        }
+    except Exception as e:
+        logger.exception("Failed to save imported LinkedIn session: %s", e)
+        return {
+            "status": "error",
+            "message": f"Failed to save session: {str(e)}"
+        }
 
 
 @proactor_isolated

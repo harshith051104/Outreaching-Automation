@@ -268,7 +268,16 @@ async def get_calendars(
 
 
 
-# ── Session Management ─────────────────────────────────────────────────────
+class ImportCookiesRequest(BaseModel):
+    cookies: list[dict]
+
+
+@router.post("/session/import-cookies", summary="Import LinkedIn cookies")
+async def import_cookies(request: ImportCookiesRequest, current_user: dict = Depends(get_current_user)):
+    """Import and validate LinkedIn session cookies."""
+    from app.services.linkedin_outreach_service import import_session_with_cookies
+    result = await import_session_with_cookies(current_user["id"], request.cookies)
+    return result
 
 
 @router.post("/session/connect", summary="Start LinkedIn browser session")

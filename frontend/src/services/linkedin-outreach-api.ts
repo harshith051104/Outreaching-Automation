@@ -127,6 +127,11 @@ export const connectLinkedInSession = async (): Promise<LinkedInSessionStatus> =
   return response.data;
 };
 
+export const importLinkedInCookies = async (cookies: any[]): Promise<LinkedInSessionStatus> => {
+  const response = await api.post<LinkedInSessionStatus>("/linkedin/session/import-cookies", { cookies });
+  return response.data;
+};
+
 export const getLinkedInSessionStatus = async (): Promise<LinkedInSessionStatus> => {
   const response = await api.get<LinkedInSessionStatus>("/linkedin/session/status");
   return response.data;
