@@ -150,6 +150,52 @@ async def _launch_stealth_browser(pw, headless: bool = False, slow_mo: int = 0):
         )
 
 
+def _sanitize_cookies(cookies: list[dict]) -> list[dict]:
+    """Sanitize cookies to prevent Playwright schema validation errors."""
+    sanitized = []
+    valid_samesite = {"Strict", "Lax", "None"}
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        
+        # Keep only valid Playwright cookie fields and sanitize them
+        clean_cookie = {
+            "name": str(cookie.get("name", "")),
+            "value": str(cookie.get("value", "")),
+            "domain": str(cookie.get("domain", "")),
+            "path": str(cookie.get("path", "/")),
+        }
+        
+        # Optional fields
+        if "secure" in cookie:
+            clean_cookie["secure"] = bool(cookie["secure"])
+        if "httpOnly" in cookie:
+            clean_cookie["httpOnly"] = bool(cookie["httpOnly"])
+        if "expires" in cookie:
+            try:
+                val = cookie["expires"]
+                if val is not None:
+                    clean_cookie["expires"] = float(val)
+            except (ValueError, TypeError):
+                pass
+                
+        # Playwright strictly requires sameSite to be capitalized "Strict", "Lax", or "None"
+        if "sameSite" in cookie:
+            s_site = str(cookie["sameSite"]).strip().lower()
+            if s_site in ("strict", "lax", "none"):
+                clean_cookie["sameSite"] = s_site.capitalize()
+            elif s_site == "no_restriction":
+                clean_cookie["sameSite"] = "None"
+            elif s_site.capitalize() in valid_samesite:
+                clean_cookie["sameSite"] = s_site.capitalize()
+            else:
+                # Omit if invalid so Playwright defaults it
+                pass
+                
+        sanitized.append(clean_cookie)
+    return sanitized
+
+
 async def _create_stealth_context(browser, cookies=None, user_agent=None):
     """Create browser context with stealth properties like custom UA and spoofed navigator.webdriver."""
     default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -161,7 +207,8 @@ async def _create_stealth_context(browser, cookies=None, user_agent=None):
     )
     
     if cookies:
-        await context.add_cookies(cookies)
+        sanitized_cookies = _sanitize_cookies(cookies)
+        await context.add_cookies(sanitized_cookies)
         
     # Inject script to override navigator.webdriver, languages, plugins, and spoof chrome APIs
     await context.add_init_script(
