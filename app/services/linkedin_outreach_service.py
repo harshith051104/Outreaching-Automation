@@ -22,7 +22,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-LINKEDIN_HEADLESS = os.getenv("LINKEDIN_HEADLESS", "true").lower() in ("true", "1", "yes")
+import shutil
+
+HAS_XVFB = shutil.which("xvfb-run") is not None
+LINKEDIN_HEADLESS = os.getenv("LINKEDIN_HEADLESS", "false" if HAS_XVFB else "true").lower() in ("true", "1", "yes")
 
 
 async def _safe_query_selector_text(page, selectors: List[str], default: str = "") -> str:
@@ -408,6 +411,9 @@ async def run_linkedin_action_in_subprocess(
         if message:
             cmd.extend(["--message", message])
             
+        if sys.platform != "win32" and HAS_XVFB:
+            cmd = ["xvfb-run", "-a"] + cmd
+            
         logger.info(f"Spawning child process for LinkedIn action '{action}' from directory '{project_root}': {' '.join(cmd)}")
         
         # Copy current environment to pass PATH, virtualenv, and other config variables
@@ -598,7 +604,7 @@ async def _validate_session_pw(cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
     try:
         async_playwright = await _get_playwright()
         pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=True)
+        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
         context = await _create_stealth_context(browser, cookies=cookies)
         page = await context.new_page()
         try:
