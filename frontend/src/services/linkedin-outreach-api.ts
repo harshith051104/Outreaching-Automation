@@ -10,7 +10,7 @@ import api from "./api";
 // ── Interfaces ────────────────────────────────────────────────────────────
 
 export interface LinkedInSessionStatus {
-  status: "connected" | "disconnected" | "expired" | "error";
+  status: "connected" | "disconnected" | "expired" | "error" | "login_timeout";
   last_validated_at?: string;
   created_at?: string;
   message?: string;
