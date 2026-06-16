@@ -539,60 +539,83 @@ async def start_session(user_id: str) -> Dict[str, Any]:
 
 async def import_session_with_cookies(user_id: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Import external LinkedIn cookies, validate them via headless Playwright,
+    Import external LinkedIn cookies, validate them via Playwright in a subprocess,
     and if valid, encrypt and save them in the database.
     """
-    logger.info("Importing and validating LinkedIn session cookies for user %s", user_id)
+    logger.info("Importing and validating LinkedIn session cookies for user %s via subprocess", user_id)
     
-    # 1. Validate cookies using _validate_session_pw (which runs headlessly)
-    val_res = await _validate_session_pw(cookies)
-    is_valid = val_res.get("valid", False)
-    
-    if not is_valid:
-        logger.warning("Imported cookies for user %s are invalid or expired", user_id)
+    # 1. Sanitize cookies to prevent Playwright validation crashes
+    sanitized_cookies = _sanitize_cookies(cookies)
+    if not sanitized_cookies:
         return {
             "status": "error",
-            "message": "Validation failed: Pasted cookies are invalid or expired. Please export fresh cookies and try again."
+            "message": "Validation failed: No valid cookies found in the input."
         }
         
-    # 2. Encrypt and save cookies
+    # 2. Encrypt and save cookies temporarily with a 'validating' status
     try:
         from app.config.mongodb_config import get_database
-        cookies_json = json.dumps(cookies)
+        cookies_json = json.dumps(sanitized_cookies)
         encrypted_cookies = _encrypt_cookies(cookies_json)
         
         db = await get_database()
         now = datetime.now(timezone.utc)
-        update_fields = {
-            "user_id": user_id,
-            "cookies_encrypted": encrypted_cookies,
-            "status": "connected",
-            "last_validated_at": now,
-            "created_at": now,
-            "updated_at": now,
-        }
-        if val_res.get("account_name"):
-            update_fields["account_name"] = val_res["account_name"]
-        if val_res.get("avatar_url"):
-            update_fields["avatar_url"] = val_res["avatar_url"]
-            
+        
         await db.linkedin_sessions.update_one(
             {"user_id": user_id},
-            {"$set": update_fields},
+            {"$set": {
+                "user_id": user_id,
+                "cookies_encrypted": encrypted_cookies,
+                "status": "validating",
+                "last_validated_at": now,
+                "created_at": now,
+                "updated_at": now,
+            }},
             upsert=True
         )
-        logger.info("Successfully imported and saved LinkedIn session for user %s", user_id)
-        return {
-            "status": "connected",
-            "message": "LinkedIn session imported successfully.",
-            "account_name": val_res.get("account_name"),
-            "avatar_url": val_res.get("avatar_url")
-        }
     except Exception as e:
-        logger.exception("Failed to save imported LinkedIn session: %s", e)
+        logger.exception("Failed to save temporary LinkedIn session: %s", e)
         return {
             "status": "error",
             "message": f"Failed to save session: {str(e)}"
+        }
+
+    # 3. Validate the saved session using the subprocess runner
+    try:
+        val_res = await run_linkedin_action_in_subprocess(
+            action="validate_session",
+            user_id=user_id
+        )
+        logger.info("Subprocess validation result: %s", val_res)
+    except Exception as exc:
+        logger.exception("Subprocess validation execution failed: %s", exc)
+        return {
+            "status": "error",
+            "message": f"Validation execution failed: {str(exc)}"
+        }
+        
+    # 4. Check the updated session status in the database
+    try:
+        updated_session = await db.linkedin_sessions.find_one({"user_id": user_id})
+        if not updated_session or updated_session.get("status") != "connected":
+            logger.warning("Imported cookies for user %s are invalid or expired according to subprocess", user_id)
+            return {
+                "status": "error",
+                "message": "Validation failed: Pasted cookies are invalid or expired. Please export fresh cookies and try again."
+            }
+            
+        logger.info("Successfully validated and imported LinkedIn session for user %s", user_id)
+        return {
+            "status": "connected",
+            "message": "LinkedIn session imported successfully.",
+            "account_name": updated_session.get("account_name"),
+            "avatar_url": updated_session.get("avatar_url")
+        }
+    except Exception as e:
+        logger.exception("Failed to retrieve validated session: %s", e)
+        return {
+            "status": "error",
+            "message": f"Failed to retrieve validated session: {str(e)}"
         }
 
 

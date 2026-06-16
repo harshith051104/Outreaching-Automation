@@ -33,7 +33,9 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Default command to start the FastAPI server under xvfb-run.
-# We use shell execution form (sh -c) so that the $PORT environment variable assigned by Railway is expanded properly.
-CMD ["sh", "-c", "rm -f /tmp/.X*-lock && xvfb-run -a -s '-screen 0 1024x768x24' uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Default command to start the FastAPI server.
+# We run uvicorn directly (using shell execution format to dynamically bind to the $PORT assigned by Railway).
+# Xvfb is not needed by the main server process because all browser operations are isolated in short-lived subprocesses.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
 
