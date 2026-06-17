@@ -163,4 +163,6 @@ mongodb_client = MongoDBClient()
 
 
 async def get_database() -> AsyncIOMotorDatabase:
+    if mongodb_client._db is None:
+        await mongodb_client.connect()
     return mongodb_client.db
