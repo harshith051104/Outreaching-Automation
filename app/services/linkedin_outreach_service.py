@@ -312,7 +312,8 @@ async def _start_session_pw() -> Dict[str, Any]:
         }
     except Exception as exc:
         logger.exception("Failed to start LinkedIn browser session: %s", exc)
-        return {"status": "error", "message": str(exc), "cookies": None}
+        err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
+        return {"status": "error", "message": err_msg, "cookies": None}
     finally:
         try:
             if browser:
@@ -812,8 +813,9 @@ async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
             scr_path = await _take_playwright_screenshot(page, "scrape")
         except Exception:
             pass
+        err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
         return {
-            "error": str(exc),
+            "error": err_msg,
             "error_screenshot_path": scr_path,
             "name": "Unknown",
             "headline": "",
@@ -1128,7 +1130,8 @@ async def _follow_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
         }
     except Exception as exc:
         logger.exception("Playwright follow failed: %s", exc)
-        return {"success": False, "error": str(exc)}
+        err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
+        return {"success": False, "error": err_msg}
     finally:
         try:
             if browser:
@@ -1989,7 +1992,8 @@ async def _send_message_pw(linkedin_url: str, message: str, cookies: List[Dict[s
             scr_path = await _take_playwright_screenshot(page, "message")
         except Exception:
             pass
-        return {"success": False, "error": str(exc), "error_screenshot_path": scr_path}
+        err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
+        return {"success": False, "error": err_msg, "error_screenshot_path": scr_path}
     finally:
         try:
             if browser:
@@ -2499,7 +2503,8 @@ async def _send_message_by_name_pw(person_name: str, message: str, cookies: List
             scr_path = await _take_playwright_screenshot(page, "msg_by_name")
         except Exception:
             pass
-        return {"success": False, "error": str(exc), "error_screenshot_path": scr_path}
+        err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
+        return {"success": False, "error": err_msg, "error_screenshot_path": scr_path}
     finally:
         try:
             if browser:

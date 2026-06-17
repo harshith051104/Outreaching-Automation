@@ -328,7 +328,8 @@ async def main():
 
     except Exception as e:
         logger.exception(f"Runner failed to execute action {args.action}")
-        result = {"success": False, "error": str(e)}
+        err_msg = str(e) if str(e) else f"{type(e).__name__}"
+        result = {"success": False, "error": err_msg}
     finally:
         await mongodb_client.disconnect()
         print(f"__RESULT__={json.dumps(result)}")
