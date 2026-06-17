@@ -5,6 +5,7 @@ Tracking tasks - Gmail reply polling.
 import asyncio
 import logging
 from datetime import datetime, timezone
+from app.config.redis_config import celery_app
 
 from app.config.mongodb_config import get_database
 from app.services.gmail_service import check_for_replies
@@ -120,3 +121,22 @@ async def _poll_campaign_replies(campaign: dict) -> int:
             logger.exception("Reply classification failed: %s", exc)
 
     return len(replies)
+
+
+def _run_async(coro):
+    """Run async coroutine synchronously inside Celery worker loop."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+@celery_app.task(name="app.tasks.tracking_tasks.poll_gmail_replies")
+def poll_gmail_replies_task():
+    """Celery task wrapper for poll_gmail_replies."""
+    logger.info("Celery Task: Running Gmail reply polling...")
+    result = _run_async(poll_gmail_replies())
+    logger.info("Celery Task: Gmail reply polling completed: %s", result)
+    return result

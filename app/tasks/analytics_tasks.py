@@ -2,9 +2,11 @@
 Analytics tasks and service.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any
+from app.config.redis_config import celery_app
 
 from app.config.mongodb_config import get_database
 from app.utils.id_generator import generate_id
@@ -191,3 +193,22 @@ async def refresh_all_campaign_analytics() -> dict:
         "errors": len([r for r in results if r["status"] == "error"]),
         "results": results,
     }
+
+
+def _run_async(coro):
+    """Run async coroutine synchronously inside Celery worker loop."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+@celery_app.task(name="app.tasks.analytics_tasks.refresh_all_campaign_analytics")
+def refresh_all_campaign_analytics_task():
+    """Celery task wrapper for refresh_all_campaign_analytics."""
+    logger.info("Celery Task: Refreshing all campaign analytics...")
+    result = _run_async(refresh_all_campaign_analytics())
+    logger.info("Celery Task: Campaign analytics refresh completed: %s", result)
+    return result

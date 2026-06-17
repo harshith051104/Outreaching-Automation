@@ -2,9 +2,11 @@
 Follow-up tasks and service.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from app.config.redis_config import celery_app
 
 from fastapi import HTTPException, status
 
@@ -179,3 +181,22 @@ async def process_pending_followups() -> dict:
             results.append({"followup_id": followup["id"], "status": "error", "error": str(exc)})
 
     return {"status": "processed", "count": len(results), "results": results}
+
+
+def _run_async(coro):
+    """Run async coroutine synchronously inside Celery worker loop."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+@celery_app.task(name="app.tasks.followup_tasks.process_pending_followups")
+def process_pending_followups_task():
+    """Celery task wrapper for process_pending_followups."""
+    logger.info("Celery Task: Processing pending followups...")
+    result = _run_async(process_pending_followups())
+    logger.info("Celery Task: Pending followups processing completed: %s", result)
+    return result
