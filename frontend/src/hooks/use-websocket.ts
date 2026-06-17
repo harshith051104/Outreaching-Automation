@@ -44,7 +44,19 @@ export function useWebSocket({
       wsRef.current = null;
     }
 
-    const wsUrl = `ws://localhost:8000/api/reply-monitor/ws/${userId}`;
+    let wsUrl = `ws://localhost:8000/api/reply-monitor/ws/${userId}`;
+    const publicApiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (publicApiUrl) {
+      let baseUrl = publicApiUrl;
+      if (baseUrl.endsWith("/")) {
+        baseUrl = baseUrl.slice(0, -1);
+      }
+      if (!baseUrl.endsWith("/api") && !baseUrl.includes("/api/")) {
+        baseUrl = `${baseUrl}/api`;
+      }
+      // Convert http:// -> ws:// and https:// -> wss://
+      wsUrl = `${baseUrl.replace(/^http/, "ws")}/reply-monitor/ws/${userId}`;
+    }
 
     try {
       const ws = new WebSocket(wsUrl);
