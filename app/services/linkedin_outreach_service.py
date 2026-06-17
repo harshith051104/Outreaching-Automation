@@ -404,9 +404,12 @@ async def run_linkedin_action_in_subprocess(
             json_str = stdout
             
         try:
-            return json.loads(json_str)
+            parsed = json.loads(json_str)
+            if isinstance(parsed, dict) and not parsed.get("success", True):
+                logger.error(f"LinkedIn subprocess action '{action}' failed. Subprocess Stderr: {res.stderr}")
+            return parsed
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse subprocess JSON output: {e}. Output was: {stdout[:500]}")
+            logger.error(f"Failed to parse subprocess JSON output: {e}. Output was: {stdout[:500]}. Stderr was: {res.stderr}")
             return {
                 "success": False,
                 "error": f"Invalid response from subprocess: {stdout[:200]}"
@@ -417,7 +420,8 @@ async def run_linkedin_action_in_subprocess(
         return {"success": False, "error": f"Request timeout after {timeout_seconds}s"}
     except Exception as e:
         logger.exception(f"Exception running LinkedIn subprocess action '{action}'")
-        return {"success": False, "error": str(e)}
+        err_msg = str(e) if str(e) else f"{type(e).__name__}"
+        return {"success": False, "error": err_msg}
 
 
 async def start_session(user_id: str) -> Dict[str, Any]:
@@ -1702,7 +1706,8 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             scr_path = await _take_playwright_screenshot(page, "connect")
         except Exception:
             pass
-        return {"success": False, "error": str(exc), "error_screenshot_path": scr_path}
+        err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
+        return {"success": False, "error": err_msg, "error_screenshot_path": scr_path}
     finally:
         try:
             if browser:
