@@ -1522,6 +1522,8 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
         ]
 
         send_selectors = [
+            "button:has-text('Send without a note')",
+            "button:has-text('Send without note')",
             "button:has-text('Send')",
             "button:has-text('Send now')",
             "button:has-text('Send invitation')",
@@ -1553,16 +1555,8 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
                     continue
 
             if not add_note_clicked:
-                scr_path = ""
-                try:
-                    scr_path = await _take_playwright_screenshot(page, "add_note_btn_failed")
-                except Exception:
-                    pass
-                return {
-                    "success": False,
-                    "error": "Failed to locate and click 'Add a note' button inside the connection dialog.",
-                    "error_screenshot_path": scr_path
-                }
+                logger.warning("Failed to locate and click 'Add a note' button inside the connection dialog. Setting out_of_notes = True to send without a note.")
+                out_of_notes = True
 
             await _random_delay(1, 2)
 
@@ -1653,31 +1647,47 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
                 except Exception:
                     continue
 
-        # Fallback if out of notes and the dialog was closed
+        # Fallback if out of notes (either Premium modal popped up or Add a note button wasn't found/clicked)
         if not send_clicked and out_of_notes:
-            logger.info("Connect dialog was closed by Premium modal dismissal. Reloading page to reset state, then re-trying connection request without a note.")
-            try:
-                await page.reload(wait_until="domcontentloaded", timeout=30000)
-                await _random_delay(3, 5)
-            except Exception as e:
-                logger.warning("Page reload timed out or failed: %s", e)
-            
-            # Click Connect again using robust helper
-            connect_clicked = await _find_and_click_connect_button(page, containers)
-            
-            if connect_clicked:
-                await _random_delay(2, 3)
-                # Now click Send directly (do not click Add a note)
-                for selector in send_selectors:
-                    loc = page.locator(selector).first
-                    try:
-                        await loc.wait_for(state="visible", timeout=5000)
-                        await loc.click(timeout=5000)
+            # 1. Try to click Send directly in the already open connection dialog
+            logger.info("Attempting to click Send/Send without a note button in the active dialog first...")
+            for selector in send_selectors:
+                loc = page.locator(selector).first
+                try:
+                    if await loc.is_visible(timeout=2000):
+                        await loc.click(timeout=3000)
                         send_clicked = True
-                        logger.info("Clicked Send connection button directly on retry: %s", selector)
+                        logger.info("Clicked Send connection button directly (without note) in active dialog using: %s", selector)
+                        await _random_delay(2, 4)
                         break
-                    except Exception:
-                        continue
+                except Exception:
+                    continue
+
+            # 2. If it is still not clicked, reload the page and try a clean connection request without a note
+            if not send_clicked:
+                logger.info("Connect dialog was closed or not responsive. Reloading page to reset state, then re-trying connection request without a note.")
+                try:
+                    await page.reload(wait_until="domcontentloaded", timeout=30000)
+                    await _random_delay(3, 5)
+                except Exception as e:
+                    logger.warning("Page reload timed out or failed: %s", e)
+                
+                # Click Connect again using robust helper
+                connect_clicked = await _find_and_click_connect_button(page, containers)
+                
+                if connect_clicked:
+                    await _random_delay(2, 3)
+                    # Now click Send directly (do not click Add a note)
+                    for selector in send_selectors:
+                        loc = page.locator(selector).first
+                        try:
+                            await loc.wait_for(state="visible", timeout=5000)
+                            await loc.click(timeout=5000)
+                            send_clicked = True
+                            logger.info("Clicked Send connection button directly on retry: %s", selector)
+                            break
+                        except Exception:
+                            continue
 
         if not send_clicked:
             scr_path = ""
