@@ -139,7 +139,12 @@ class MongoDBClient:
         await safe_create_index(db.uploaded_files, "user_id")
         await safe_create_index(db.uploaded_files, "id", unique=True)
 
-        await safe_create_index(db.oauth_sessions, "session_id", unique=True)
+        # oauth_sessions indexes (TTL and unique state lookup)
+        try:
+            await db.oauth_sessions.drop_index("session_id_1")
+        except Exception:
+            pass
+        await safe_create_index(db.oauth_sessions, "state", unique=True)
         await safe_create_index(db.oauth_sessions, [("created_at", 1)], expireAfterSeconds=3600)
 
         # Chat sessions and messages
