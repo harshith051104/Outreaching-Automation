@@ -101,22 +101,15 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application started at %s", datetime.now(timezone.utc).isoformat())
 
-    # Start APScheduler to run all background tasks at their respective intervals
-    try:
-        from app.config.scheduler import start_scheduler
-        start_scheduler()
-    except Exception as exc:
-        logger.error("Failed to start APScheduler: %s", exc)
+    campaign_processor_task = asyncio.create_task(_campaign_processor_loop())
 
     yield
 
-    # Shutdown APScheduler
+    campaign_processor_task.cancel()
     try:
-        from app.config.scheduler import shutdown_scheduler
-        shutdown_scheduler()
-    except Exception as exc:
-        logger.error("Failed to shutdown APScheduler: %s", exc)
-
+        await campaign_processor_task
+    except asyncio.CancelledError:
+        pass
     await mongodb_client.disconnect()
     logger.info("Application shutdown complete.")
 

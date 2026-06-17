@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  # Caddy reverse proxy for SSL
+  caddy:
+    image: caddy:2-alpine
+    container_name: outreach-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  # Main FastAPI App Server
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: outreach-fastapi
+    restart: always
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - shared-uploads:/app/uploads
+    depends_on:
+      - redis
+
+  # Redis message broker
+  redis:
+    image: redis:7-alpine
+    container_name: outreach-redis
+    restart: always
+    expose:
+      - "6379"
+
+  # Celery worker (running background tasks & browser automation)
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: outreach-celery-worker
+    restart: always
+    command: celery -A celery_worker.celery_app worker --loglevel=info --concurrency=1
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - shared-uploads:/app/uploads
+    depends_on:
+      - redis
+      - web
+
+  # Celery beat scheduler
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: outreach-celery-beat
+    restart: always
+    command: celery -A celery_worker.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+volumes:
+  caddy_data:
+  caddy_config:
+  shared-uploads:

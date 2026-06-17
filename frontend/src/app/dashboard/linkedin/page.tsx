@@ -6,7 +6,6 @@ import { generateLinkedInCalendar, getLinkedInCalendars, LinkedInCalendar } from
 import {
   getLinkedInSessionStatus,
   connectLinkedInSession,
-  importLinkedInCookies,
   disconnectLinkedInSession,
   validateLinkedInSession,
   getPendingActions,
@@ -138,9 +137,6 @@ export default function LinkedInHubPage() {
   const [loading, setLoading] = useState(true);
   const [connectingSession, setConnectingSession] = useState(false);
   const [validatingSession, setValidatingSession] = useState(false);
-  const [cookiesJson, setCookiesJson] = useState("");
-  const [importingCookies, setImportingCookies] = useState(false);
-  const [showCookieForm, setShowCookieForm] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [reschedulingActionId, setReschedulingActionId] = useState<string | null>(null);
@@ -217,55 +213,11 @@ export default function LinkedInHubPage() {
     try {
       const result = await connectLinkedInSession();
       setSessionStatus(result);
-      if (result.status === "error") {
-        alert(`Failed to connect LinkedIn: ${result.message || "Unknown error"}`);
-      } else if (result.status === "login_timeout") {
-        alert("Login timed out. Please make sure to complete the login in the browser window.");
-      } else {
-        await loadAllData();
-      }
-    } catch (err: any) {
+      await loadAllData();
+    } catch (err) {
       console.error("Session connect failed:", err);
-      alert(`Session connection failed: ${err.message || "Unknown error"}`);
     } finally {
       setConnectingSession(false);
-    }
-  };
-
-  const handleImportCookies = async () => {
-    if (!cookiesJson.trim()) {
-      alert("Please paste some cookie JSON.");
-      return;
-    }
-    
-    let parsedCookies: any[] = [];
-    try {
-      parsedCookies = JSON.parse(cookiesJson.trim());
-      if (!Array.isArray(parsedCookies)) {
-        throw new Error("Cookies must be a JSON array.");
-      }
-    } catch (e: any) {
-      alert(`Invalid JSON format: ${e.message || "Make sure you copied a valid JSON array of cookies."}`);
-      return;
-    }
-    
-    setImportingCookies(true);
-    try {
-      const result = await importLinkedInCookies(parsedCookies);
-      setSessionStatus(result);
-      if (result.status === "connected") {
-        alert("LinkedIn session connected and imported successfully!");
-        setCookiesJson("");
-        setShowCookieForm(false);
-        await loadAllData();
-      } else {
-        alert(`Failed to import cookies: ${result.message || "Validation failed."}`);
-      }
-    } catch (err: any) {
-      console.error("Cookie import failed:", err);
-      alert(`Cookie import failed: ${err.response?.data?.detail || err.message || "Unknown error"}`);
-    } finally {
-      setImportingCookies(false);
     }
   };
 
@@ -803,61 +755,21 @@ export default function LinkedInHubPage() {
                   </div>
                 </div>
               ) : (
-                <div style={{ background: "var(--sidebar-toggle-bg)", borderColor: "var(--card-border)" }} className="border border-dashed p-6 rounded-xl text-center space-y-4">
-                  <AlertCircle className="h-8 w-8 text-amber-500 mx-auto animate-pulse" />
+                <div style={{ background: "var(--sidebar-toggle-bg)", borderColor: "var(--card-border)" }} className="border border-dashed p-6 rounded-xl text-center space-y-3">
+                  <AlertCircle className="h-8 w-8 text-amber-500 mx-auto" />
                   <div className="space-y-1">
                     <h4 className="text-sm font-bold text-[var(--foreground-color)]">No LinkedIn Session Linked</h4>
                     <p className="text-[11px] text-[var(--sidebar-text-muted)] max-w-sm mx-auto">
                       Connect your LinkedIn profile to configure automation tasks, parse connection pipelines, and sync history.
                     </p>
                   </div>
-                  
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-                    <button
-                      onClick={handleConnectSession}
-                      disabled={connectingSession || importingCookies}
-                      className="bg-[var(--primary)] hover:brightness-110 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50 cursor-pointer w-full sm:w-auto"
-                    >
-                      {connectingSession ? "Spinning Up Browser..." : "Connect via Local Browser"}
-                    </button>
-                    
-                    <button
-                      onClick={() => setShowCookieForm(!showCookieForm)}
-                      disabled={connectingSession || importingCookies}
-                      className="bg-transparent hover:bg-[rgba(124,92,255,0.05)] border border-[var(--primary)] text-[var(--primary)] px-4 py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50 cursor-pointer w-full sm:w-auto"
-                    >
-                      {showCookieForm ? "Hide Cookie Panel" : "Connect via Cookie Import (Cloud)"}
-                    </button>
-                  </div>
-
-                  {showCookieForm && (
-                    <div style={{ borderTop: "1px solid var(--card-border)" }} className="pt-4 mt-4 text-left space-y-3">
-                      <div className="space-y-1">
-                        <h5 className="text-xs font-bold text-[var(--foreground-color)]">Pasted Cookie JSON</h5>
-                        <p className="text-[10px] text-[var(--sidebar-text-muted)] leading-relaxed">
-                          To connect in the cloud (Railway): Log into LinkedIn in your browser, export your cookies as a JSON array using an extension like <strong>EditThisCookie</strong>, and paste the JSON array below.
-                        </p>
-                      </div>
-                      
-                      <textarea
-                        rows={5}
-                        placeholder='[{"domain": ".linkedin.com", "name": "li_at", "value": "..."}]'
-                        value={cookiesJson}
-                        onChange={(e) => setCookiesJson(e.target.value)}
-                        style={inputStyle}
-                        className="font-mono text-[11px] focus:ring-1 focus:ring-[var(--primary)] resize-none"
-                      />
-                      
-                      <button
-                        onClick={handleImportCookies}
-                        disabled={importingCookies || !cookiesJson.trim()}
-                        className="bg-[var(--primary)] hover:brightness-110 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer w-full"
-                      >
-                        {importingCookies && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                        {importingCookies ? "Validating & Connecting..." : "Import & Connect"}
-                      </button>
-                    </div>
-                  )}
+                  <button
+                    onClick={handleConnectSession}
+                    disabled={connectingSession}
+                    className="bg-[var(--primary)] hover:brightness-110 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    {connectingSession ? "Spinning Up Browser..." : "Initialize Session Connection"}
+                  </button>
                 </div>
               )}
             </div>

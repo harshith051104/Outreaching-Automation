@@ -22,10 +22,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-import shutil
-
-HAS_XVFB = shutil.which("xvfb-run") is not None
-LINKEDIN_HEADLESS = os.getenv("LINKEDIN_HEADLESS", "false" if HAS_XVFB else "true").lower() in ("true", "1", "yes")
+LINKEDIN_HEADLESS = os.getenv("LINKEDIN_HEADLESS", "true").lower() in ("true", "1", "yes")
 
 
 async def _safe_query_selector_text(page, selectors: List[str], default: str = "") -> str:
@@ -153,52 +150,6 @@ async def _launch_stealth_browser(pw, headless: bool = False, slow_mo: int = 0):
         )
 
 
-def _sanitize_cookies(cookies: list[dict]) -> list[dict]:
-    """Sanitize cookies to prevent Playwright schema validation errors."""
-    sanitized = []
-    valid_samesite = {"Strict", "Lax", "None"}
-    for cookie in cookies:
-        if not isinstance(cookie, dict):
-            continue
-        
-        # Keep only valid Playwright cookie fields and sanitize them
-        clean_cookie = {
-            "name": str(cookie.get("name", "")),
-            "value": str(cookie.get("value", "")),
-            "domain": str(cookie.get("domain", "")),
-            "path": str(cookie.get("path", "/")),
-        }
-        
-        # Optional fields
-        if "secure" in cookie:
-            clean_cookie["secure"] = bool(cookie["secure"])
-        if "httpOnly" in cookie:
-            clean_cookie["httpOnly"] = bool(cookie["httpOnly"])
-        if "expires" in cookie:
-            try:
-                val = cookie["expires"]
-                if val is not None:
-                    clean_cookie["expires"] = float(val)
-            except (ValueError, TypeError):
-                pass
-                
-        # Playwright strictly requires sameSite to be capitalized "Strict", "Lax", or "None"
-        if "sameSite" in cookie:
-            s_site = str(cookie["sameSite"]).strip().lower()
-            if s_site in ("strict", "lax", "none"):
-                clean_cookie["sameSite"] = s_site.capitalize()
-            elif s_site == "no_restriction":
-                clean_cookie["sameSite"] = "None"
-            elif s_site.capitalize() in valid_samesite:
-                clean_cookie["sameSite"] = s_site.capitalize()
-            else:
-                # Omit if invalid so Playwright defaults it
-                pass
-                
-        sanitized.append(clean_cookie)
-    return sanitized
-
-
 async def _create_stealth_context(browser, cookies=None, user_agent=None):
     """Create browser context with stealth properties like custom UA and spoofed navigator.webdriver."""
     default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -210,8 +161,7 @@ async def _create_stealth_context(browser, cookies=None, user_agent=None):
     )
     
     if cookies:
-        sanitized_cookies = _sanitize_cookies(cookies)
-        await context.add_cookies(sanitized_cookies)
+        await context.add_cookies(cookies)
         
     # Inject script to override navigator.webdriver, languages, plugins, and spoof chrome APIs
     await context.add_init_script(
@@ -385,11 +335,6 @@ async def run_linkedin_action_in_subprocess(
     """Runs a LinkedIn Playwright action in a separate Python process to prevent event loop crashes on Windows."""
     import sys
     import subprocess
-    import os
-
-    # Calculate project root dynamically to ensure python can import 'app' module
-    current_file_path = os.path.abspath(__file__)
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
 
     action_timeouts = {
         "send_message": 60,
@@ -411,19 +356,8 @@ async def run_linkedin_action_in_subprocess(
         if message:
             cmd.extend(["--message", message])
             
-        if sys.platform != "win32" and HAS_XVFB:
-            cmd = ["xvfb-run", "-a"] + cmd
-            
-        logger.info(f"Spawning child process for LinkedIn action '{action}' from directory '{project_root}': {' '.join(cmd)}")
+        logger.info(f"Spawning child process for LinkedIn action '{action}': {' '.join(cmd)}")
         
-        # Copy current environment to pass PATH, virtualenv, and other config variables
-        env = os.environ.copy()
-        # Add project_root to PYTHONPATH just in case
-        if "PYTHONPATH" in env:
-            env["PYTHONPATH"] = project_root + os.pathsep + env["PYTHONPATH"]
-        else:
-            env["PYTHONPATH"] = project_root
-
         try:
             process = subprocess.Popen(
                 cmd,
@@ -432,8 +366,6 @@ async def run_linkedin_action_in_subprocess(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                cwd=project_root,
-                env=env,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
             )
             try:
@@ -456,73 +388,36 @@ async def run_linkedin_action_in_subprocess(
         
         if res.returncode != 0:
             logger.error(f"Subprocess failed with code {res.returncode}. Stderr: {res.stderr}")
-            err_msg = f"Process error (exit code {res.returncode}): {res.stderr.strip()[:500]}"
             return {
                 "success": False,
-                "status": "error",
-                "error": err_msg,
-                "message": err_msg
+                "error": f"Process error (exit code {res.returncode}): {res.stderr.strip()[:500]}"
             }
             
         stdout = res.stdout.strip()
         if not stdout:
-            err_msg = f"Empty response from subprocess. Stderr: {res.stderr.strip()[:500]}"
-            return {
-                "success": False,
-                "status": "error",
-                "error": err_msg,
-                "message": err_msg
-            }
+            return {"success": False, "error": "Empty response from subprocess"}
             
         marker = "__RESULT__="
-        json_str = None
-        for line in stdout.splitlines():
-            if line.startswith(marker):
-                json_str = line[len(marker):].strip()
-                break
-        if not json_str:
-            if marker in stdout:
-                json_str = stdout.split(marker)[1].strip()
-            else:
-                json_str = stdout
+        if marker in stdout:
+            json_str = stdout.split(marker)[1].strip()
+        else:
+            json_str = stdout
             
         try:
-            parsed = json.loads(json_str)
-            if isinstance(parsed, dict) and "status" not in parsed:
-                if parsed.get("success") is True:
-                    parsed["status"] = "connected"
-                elif parsed.get("success") is False:
-                    parsed["status"] = "error"
-                    parsed["message"] = parsed.get("error", "Failed to execute LinkedIn action.")
-            return parsed
+            return json.loads(json_str)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse subprocess JSON output: {e}. Output was: {stdout[:500]}")
-            err_msg = f"Invalid response from subprocess: {stdout[:200]}"
             return {
                 "success": False,
-                "status": "error",
-                "error": err_msg,
-                "message": err_msg
+                "error": f"Invalid response from subprocess: {stdout[:200]}"
             }
             
     except asyncio.TimeoutError:
         logger.error(f"Async wait timeout for action '{action}'")
-        err_msg = f"Request timeout after {timeout_seconds}s"
-        return {
-            "success": False,
-            "status": "error",
-            "error": err_msg,
-            "message": err_msg
-        }
+        return {"success": False, "error": f"Request timeout after {timeout_seconds}s"}
     except Exception as e:
         logger.exception(f"Exception running LinkedIn subprocess action '{action}'")
-        err_msg = str(e)
-        return {
-            "success": False,
-            "status": "error",
-            "error": err_msg,
-            "message": err_msg
-        }
+        return {"success": False, "error": str(e)}
 
 
 async def start_session(user_id: str) -> Dict[str, Any]:
@@ -537,88 +432,6 @@ async def start_session(user_id: str) -> Dict[str, Any]:
     )
 
 
-async def import_session_with_cookies(user_id: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Import external LinkedIn cookies, validate them via Playwright in a subprocess,
-    and if valid, encrypt and save them in the database.
-    """
-    logger.info("Importing and validating LinkedIn session cookies for user %s via subprocess", user_id)
-    
-    # 1. Sanitize cookies to prevent Playwright validation crashes
-    sanitized_cookies = _sanitize_cookies(cookies)
-    if not sanitized_cookies:
-        return {
-            "status": "error",
-            "message": "Validation failed: No valid cookies found in the input."
-        }
-        
-    # 2. Encrypt and save cookies temporarily with a 'validating' status
-    try:
-        from app.config.mongodb_config import get_database
-        cookies_json = json.dumps(sanitized_cookies)
-        encrypted_cookies = _encrypt_cookies(cookies_json)
-        
-        db = await get_database()
-        now = datetime.now(timezone.utc)
-        
-        await db.linkedin_sessions.update_one(
-            {"user_id": user_id},
-            {"$set": {
-                "user_id": user_id,
-                "cookies_encrypted": encrypted_cookies,
-                "status": "validating",
-                "last_validated_at": now,
-                "created_at": now,
-                "updated_at": now,
-            }},
-            upsert=True
-        )
-    except Exception as e:
-        logger.exception("Failed to save temporary LinkedIn session: %s", e)
-        return {
-            "status": "error",
-            "message": f"Failed to save session: {str(e)}"
-        }
-
-    # 3. Validate the saved session using the subprocess runner
-    try:
-        val_res = await run_linkedin_action_in_subprocess(
-            action="validate_session",
-            user_id=user_id
-        )
-        logger.info("Subprocess validation result: %s", val_res)
-    except Exception as exc:
-        logger.exception("Subprocess validation execution failed: %s", exc)
-        return {
-            "status": "error",
-            "message": f"Validation execution failed: {str(exc)}"
-        }
-        
-    # 4. Check the updated session status in the database
-    try:
-        updated_session = await db.linkedin_sessions.find_one({"user_id": user_id})
-        if not updated_session or updated_session.get("status") != "connected":
-            logger.warning("Imported cookies for user %s are invalid or expired according to subprocess", user_id)
-            return {
-                "status": "error",
-                "message": "Validation failed: Pasted cookies are invalid or expired. Please export fresh cookies and try again."
-            }
-            
-        logger.info("Successfully validated and imported LinkedIn session for user %s", user_id)
-        return {
-            "status": "connected",
-            "message": "LinkedIn session imported successfully.",
-            "account_name": updated_session.get("account_name"),
-            "avatar_url": updated_session.get("avatar_url")
-        }
-    except Exception as e:
-        logger.exception("Failed to retrieve validated session: %s", e)
-        return {
-            "status": "error",
-            "message": f"Failed to retrieve validated session: {str(e)}"
-        }
-
-
 @proactor_isolated
 async def _validate_session_pw(cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Validate cookies inside a thread-isolated Playwright instance."""
@@ -627,15 +440,13 @@ async def _validate_session_pw(cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
     try:
         async_playwright = await _get_playwright()
         pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
+        browser = await _launch_stealth_browser(pw, headless=True)
         context = await _create_stealth_context(browser, cookies=cookies)
         page = await context.new_page()
         try:
             await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=15000)
         except Exception as e:
             logger.warning("page.goto feed timed out, checking URL anyway: %s", e)
-        
-        logger.info("Session validation landed on URL: %s", page.url)
         is_valid = "feed" in page.url and "login" not in page.url
         
         account_name = None
@@ -760,28 +571,6 @@ async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
         current_url = page.url
         if "login" in current_url or "signup" in current_url or "checkpoint" in current_url:
             return {"error": "Session expired or invalid. Please reconnect your LinkedIn account."}
-
-        # Check if we were redirected away from the personal profile page (e.g., to the feed page /feed/)
-        if "/in/" not in current_url:
-            logger.warning("Scraper redirected away from profile page. Current URL: %s", current_url)
-            scr_path = ""
-            try:
-                scr_path = await _take_playwright_screenshot(page, "redirect_failed")
-            except Exception:
-                pass
-            return {
-                "error": f"LinkedIn session restricted or redirected away from the profile page. Please verify your LinkedIn session is active (Current URL: {current_url}).",
-                "error_screenshot_path": scr_path,
-                "name": "Unknown",
-                "headline": "",
-                "about": "",
-                "location": "",
-                "experience": [],
-                "education": [],
-                "skills": [],
-                "connection_count": "",
-                "profile_url": linkedin_url
-            }
 
         try:
             global_nav = await page.query_selector("#global-nav, .global-nav")
@@ -1009,29 +798,7 @@ async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
         profile_data["connection_count"] = ""
         profile_data["profile_url"] = linkedin_url
 
-        name = profile_data.get("name", "").strip()
-        if not name or name in ("Unknown", "Feed detail update"):
-            logger.warning("Scraped name is invalid: %s", name)
-            scr_path = ""
-            try:
-                scr_path = await _take_playwright_screenshot(page, "invalid_name")
-            except Exception:
-                pass
-            return {
-                "error": f"Failed to extract a valid name from the profile page (resolved to: '{name}'). Page layout might have changed or rendering failed.",
-                "error_screenshot_path": scr_path,
-                "name": name or "Unknown",
-                "headline": profile_data.get("headline", ""),
-                "about": profile_data.get("about", ""),
-                "location": profile_data.get("location", ""),
-                "experience": [],
-                "education": [],
-                "skills": [],
-                "connection_count": "",
-                "profile_url": linkedin_url
-            }
-
-        logger.info("Successfully scraped profile: %s", name)
+        logger.info("Successfully scraped profile: %s", profile_data.get("name", "Unknown"))
         return profile_data
 
     except Exception as exc:

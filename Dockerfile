@@ -11,9 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
-    xvfb \
-    xauth \
-    which \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -33,9 +30,5 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Default command to start the FastAPI server.
-# We run uvicorn directly (using shell execution format to dynamically bind to the $PORT assigned by Railway).
-# Xvfb is not needed by the main server process because all browser operations are isolated in short-lived subprocesses.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
-
-
+# Default command to start the FastAPI server
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

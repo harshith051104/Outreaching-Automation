@@ -10,7 +10,7 @@ import api from "./api";
 // ── Interfaces ────────────────────────────────────────────────────────────
 
 export interface LinkedInSessionStatus {
-  status: "connected" | "disconnected" | "expired" | "error" | "login_timeout";
+  status: "connected" | "disconnected" | "expired" | "error";
   last_validated_at?: string;
   created_at?: string;
   message?: string;
@@ -124,11 +124,6 @@ export interface LinkedInQueueStatus {
 
 export const connectLinkedInSession = async (): Promise<LinkedInSessionStatus> => {
   const response = await api.post<LinkedInSessionStatus>("/linkedin/session/connect");
-  return response.data;
-};
-
-export const importLinkedInCookies = async (cookies: any[]): Promise<LinkedInSessionStatus> => {
-  const response = await api.post<LinkedInSessionStatus>("/linkedin/session/import-cookies", { cookies });
   return response.data;
 };
 
