@@ -11,9 +11,9 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-# Export domain name for Caddy
-if grep -q "DOMAIN_NAME" .env; then
-  export $(grep DOMAIN_NAME .env | xargs)
+# Export domain name for Caddy (ignoring inline comments and surrounding quotes)
+if grep -q "^DOMAIN_NAME=" .env; then
+  export DOMAIN_NAME=$(grep -E "^DOMAIN_NAME=" .env | cut -d '=' -f2 | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
   echo "Deploying for Domain: $DOMAIN_NAME"
 else
   echo "Error: DOMAIN_NAME is not set in your .env file."
