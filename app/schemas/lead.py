@@ -17,6 +17,7 @@ class LeadCreate(BaseModel):
     company: str = ""
     website: str = ""
     role: str = ""
+    focus: str = ""
     campaign_id: str
 
 
@@ -27,6 +28,7 @@ class LeadUpdate(BaseModel):
     company: Optional[str] = None
     website: Optional[str] = None
     role: Optional[str] = None
+    focus: Optional[str] = None
     status: Optional[str] = None
     score: Optional[float] = None
     research_data: Optional[dict[str, Any]] = None
@@ -43,6 +45,7 @@ class LeadResponse(BaseModel):
     company: str
     website: str
     role: str
+    focus: str = ""
     status: str
     score: float
     research_data: dict[str, Any]

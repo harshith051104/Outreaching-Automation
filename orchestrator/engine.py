@@ -1011,7 +1011,10 @@ Return your output strictly as a JSON object matching this structure:
             value = ctx
             for part in parts:
                 if isinstance(value, dict):
-                    value = value.get(part, None)
+                    val = value.get(part, None)
+                    if val is None and part == "investor_focus":
+                        val = value.get("focus", None)
+                    value = val
                 elif isinstance(value, list):
                     try:
                         idx = int(part)
@@ -1031,7 +1034,10 @@ Return your output strictly as a JSON object matching this structure:
             value = ctx
             for part in parts:
                 if isinstance(value, dict):
-                    value = value.get(part, "")
+                    val = value.get(part, "")
+                    if (val == "" or val is None) and part == "investor_focus":
+                        val = value.get("focus", "")
+                    value = val
                 elif isinstance(value, list):
                     try:
                         idx = int(part)

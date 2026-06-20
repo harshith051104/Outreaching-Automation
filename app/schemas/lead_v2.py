@@ -114,6 +114,7 @@ class LeadCreate(BaseModel):
     company: str = ""
     website: str = ""
     role: str = ""
+    focus: str = ""
     phone: str = ""
     linkedin_url: str = ""
     campaign_id: str = ""
@@ -130,6 +131,7 @@ class LeadUpdate(BaseModel):
     company: Optional[str] = None
     website: Optional[str] = None
     role: Optional[str] = None
+    focus: Optional[str] = None
     phone: Optional[str] = None
     linkedin_url: Optional[str] = None
     status: Optional[LeadStatus] = None
@@ -152,6 +154,7 @@ class LeadResponse(BaseModel):
     company: str
     website: str
     role: str
+    focus: str = ""
     phone: str
     linkedin_url: str
     status: LeadStatus

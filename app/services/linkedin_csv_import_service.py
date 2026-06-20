@@ -159,6 +159,12 @@ def extract_lead_fields(row: dict[str, Any]) -> dict[str, Any]:
         if field in row and row[field]:
             lead["website"] = row[field].strip()
             break
+            
+    focus_fields = ["focus", "investor_focus", "investorfocus", "investor focus"]
+    for field in focus_fields:
+        if field in row and row[field]:
+            lead["focus"] = row[field].strip()
+            break
     
     notes_fields = ["notes", "note", "description", "about", "comments", "备注"]
     for field in notes_fields:

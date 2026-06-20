@@ -34,6 +34,10 @@ COLUMN_ALIASES: dict[str, str] = {
     "website": "website",
     "url": "website",
     "industry": "industry",
+    "focus": "focus",
+    "investor_focus": "focus",
+    "investorfocus": "focus",
+    "investor focus": "focus",
 }
 
 

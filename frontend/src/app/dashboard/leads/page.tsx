@@ -46,9 +46,9 @@ export default function LeadsPage() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvError, setCsvError] = useState("");
   const [csvSuccess, setCsvSuccess] = useState("");
-  const [leadForm, setLeadForm] = useState({ first_name: "", last_name: "", email: "", company: "", title: "", website: "" });
+  const [leadForm, setLeadForm] = useState({ first_name: "", last_name: "", email: "", company: "", title: "", website: "", focus: "" });
   const [leadError, setLeadError] = useState("");
-  const [editForm, setEditForm] = useState({ name: "", email: "", company: "", role: "", website: "", status: "" });
+  const [editForm, setEditForm] = useState({ name: "", email: "", company: "", role: "", website: "", status: "", focus: "" });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -90,8 +90,8 @@ export default function LeadsPage() {
     if (!selectedCampaignId || !leadForm.email || !fullName) { setLeadError("Please fill required fields."); return; }
     setLeadError("");
     try {
-      await createLead({ campaign_id: selectedCampaignId, name: fullName, email: leadForm.email, company: leadForm.company, role: leadForm.title, website: leadForm.website });
-      setLeadForm({ first_name: "", last_name: "", email: "", company: "", title: "", website: "" });
+      await createLead({ campaign_id: selectedCampaignId, name: fullName, email: leadForm.email, company: leadForm.company, role: leadForm.title, focus: leadForm.focus, website: leadForm.website });
+      setLeadForm({ first_name: "", last_name: "", email: "", company: "", title: "", website: "", focus: "" });
       setIsLeadModalOpen(false); loadLeads();
     } catch (err: any) { setLeadError(extractErrorMessage(err, "Failed to create lead.")); }
   };
@@ -104,7 +104,7 @@ export default function LeadsPage() {
 
   const openEditModal = (lead: any) => {
     setEditLead(lead);
-    setEditForm({ name: lead.name || "", email: lead.email || "", company: lead.company || "", role: lead.role || "", website: lead.website || "", status: lead.status || "new" });
+    setEditForm({ name: lead.name || "", email: lead.email || "", company: lead.company || "", role: lead.role || "", focus: lead.focus || "", website: lead.website || "", status: lead.status || "new" });
   };
 
   const handleSaveEdit = async () => {
@@ -250,9 +250,9 @@ export default function LeadsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--card-border)' }}>
-                  {['Name', 'Email', 'Company', 'Job Title', 'Status', 'Score', 'Quality', 'Actions'].map((h, i) => (
+                  {['Name', 'Email', 'Company', 'Job Title', 'Focus', 'Status', 'Score', 'Quality', 'Actions'].map((h, i) => (
                     <th key={h} style={{
-                      padding: '12px 16px', textAlign: i === 7 ? 'right' : 'left',
+                      padding: '12px 16px', textAlign: i === 8 ? 'right' : 'left',
                       fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
                       textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
                       whiteSpace: 'nowrap',
@@ -297,6 +297,9 @@ export default function LeadsPage() {
                       </td>
                       <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
                         {lead.role || '—'}
+                      </td>
+                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
+                        {lead.focus || '—'}
                       </td>
                       <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
                         <span style={{
@@ -424,7 +427,7 @@ export default function LeadsPage() {
                   <input type="text" value={leadForm.last_name} onChange={e => setLeadForm({ ...leadForm, last_name: e.target.value })} style={inputStyle} />
                 </div>
               </div>
-              {['email', 'company', 'title', 'website'].map(field => (
+              {['email', 'company', 'title', 'focus', 'website'].map(field => (
                 <div key={field}>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '5px' }}>
                     {field.charAt(0).toUpperCase() + field.slice(1)}{field === 'email' ? ' *' : ''}
@@ -456,7 +459,7 @@ export default function LeadsPage() {
               <button onClick={() => setEditLead(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--sidebar-text-muted)' }}><X size={20} /></button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {['name', 'email', 'company', 'role', 'website'].map(field => (
+              {['name', 'email', 'company', 'role', 'focus', 'website'].map(field => (
                 <div key={field}>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '5px' }}>
                     {field === 'role' ? 'Job Title' : field.charAt(0).toUpperCase() + field.slice(1)}
