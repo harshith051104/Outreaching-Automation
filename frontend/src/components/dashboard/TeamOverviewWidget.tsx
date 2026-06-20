@@ -250,7 +250,7 @@ export default function TeamOverviewWidget() {
                 </div>
 
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: "12px", fontWeight: "700", color: "#f5f3ff", truncate: "true" }}>
+                  <div style={{ fontSize: "12px", fontWeight: "700", color: "#f5f3ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {member.display_name || "Unknown"}
                   </div>
                   <div style={{ fontSize: "10px", color: "rgba(167,139,250,0.5)" }}>
