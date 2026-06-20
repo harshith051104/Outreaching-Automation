@@ -5,7 +5,6 @@ import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore } from "@/store/auth-store";
 import Sidebar from "@/components/layout/sidebar";
 import { Zap } from "lucide-react";
-import FeedbackWidget from "@/components/feedback/FeedbackWidget";
 
 // Pages that need zero padding (full-bleed)
 const FULL_BLEED_PAGES = ["/dashboard/chatbot"];
@@ -76,7 +75,6 @@ export default function DashboardLayout({
       }}>
         {children}
       </main>
-      <FeedbackWidget />
     </div>
   );
 }

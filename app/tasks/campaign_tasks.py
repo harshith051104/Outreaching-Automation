@@ -116,6 +116,30 @@ def _format_template(text: str, lead: dict, lead_name: str, sender_name: str = "
     return result
 
 
+def convert_text_to_html(text: str) -> str:
+    """Convert plain text newlines and markdown formatting to HTML."""
+    if not text:
+        return ""
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    has_html = "<p>" in text.lower() or "<br" in text.lower() or "<div>" in text.lower()
+
+    if not has_html:
+        paragraphs = text.split("\n\n")
+        formatted_paragraphs = []
+        for p in paragraphs:
+            if p.strip():
+                formatted_p = p.replace("\n", "<br />")
+                formatted_paragraphs.append(f"<p>{formatted_p}</p>")
+        text = "\n".join(formatted_paragraphs)
+
+    text = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"\*(.*?)\*", r"<em>\1</em>", text)
+
+    return text
+
+
 async def _process_lead(campaign: dict, lead: dict) -> str:
     """Process a single lead: research → personalize → generate → send → schedule follow-ups."""
     from app.config.settings import settings
@@ -200,6 +224,9 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
     if not subject or not body_html:
         return "skipped"
 
+    # Convert plain text newlines and markdown formatting to HTML
+    body_html = convert_text_to_html(body_html)
+
     tracking_id = generate_tracking_id()
 
     email_data = EmailCreate(
@@ -220,7 +247,8 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
         {"$set": {"status": "contacted", "updated_at": datetime.now(timezone.utc)}},
     )
 
-    if campaign.get("followup_enabled", True):
+    # Only schedule follow-ups if followup_enabled is explicitly true AND there are no sequence steps configured in the flow
+    if campaign.get("followup_enabled", False) and not campaign.get("sequence_steps"):
         followup_stages = campaign.get("followup_stages", 3)
         for seq in range(2, followup_stages + 2):
             delay_hours = campaign.get("followup_delay_days", 3) * 24 * seq

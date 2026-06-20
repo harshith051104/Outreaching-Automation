@@ -95,7 +95,7 @@ async def create_campaign(user_id: str, data: Any) -> Dict:
             "gmail_account_id": get_val("gmail_account_id", ""),
             "subject_template": get_val("subject_template", ""),
             "body_template": get_val("body_template", ""),
-            "followup_enabled": get_val("followup_enabled", True),
+            "followup_enabled": get_val("followup_enabled", False),
             "followup_stages": get_val("followup_stages", 3),
             "followup_delay_days": get_val("followup_delay_days", 3),
             "daily_send_limit": get_val("daily_send_limit", 50),

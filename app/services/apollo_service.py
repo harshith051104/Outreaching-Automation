@@ -24,13 +24,14 @@ class ApolloService:
         self.api_key = settings.APOLLO_API_KEY.strip('"').strip("'") if settings.APOLLO_API_KEY else ""
         self.base_url = "https://api.apollo.io/api/v1"
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self, api_key: str | None = None) -> Dict[str, str]:
         headers = {
             "Content-Type": "application/json",
         }
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-            headers["X-Api-Key"] = self.api_key
+        key = api_key if api_key is not None else self.api_key
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+            headers["X-Api-Key"] = key
         return headers
 
     async def search_leads(
@@ -39,9 +40,17 @@ class ApolloService:
         locations: Optional[List[str]] = None,
         industry: Optional[str] = None,
         limit: int = 10,
+        user_id: str | None = None,
     ) -> List[Dict[str, Any]]:
         """Search for leads on Apollo."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "apollo", self.api_key)
+            if api_key:
+                api_key = api_key.strip('"').strip("'")
+
+        if not api_key:
             logger.warning("Apollo API key not set")
             return []
 
@@ -63,12 +72,12 @@ class ApolloService:
                     "person_titles": job_titles,
                     "locations": locations,
                 }
-                if self.api_key:
-                    payload["api_key"] = self.api_key
+                if api_key:
+                    payload["api_key"] = api_key
 
                 response = await client.post(
                     f"{self.base_url}/mixed_people/search",
-                    headers=self._get_headers(),
+                    headers=self._get_headers(api_key=api_key),
                     json=payload,
                 )
 
@@ -94,19 +103,26 @@ class ApolloService:
             logger.error(f"Apollo search error: {e}")
             return []
 
-    async def enrich_company(self, domain: str) -> Dict[str, Any]:
+    async def enrich_company(self, domain: str, user_id: str | None = None) -> Dict[str, Any]:
         """Enrich company data from Apollo."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "apollo", self.api_key)
+            if api_key:
+                api_key = api_key.strip('"').strip("'")
+
+        if not api_key:
             return {}
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 params = {"domain": domain}
-                if self.api_key:
-                    params["api_key"] = self.api_key
+                if api_key:
+                    params["api_key"] = api_key
                 response = await client.get(
                     f"{self.base_url}/organizations/enrich",
-                    headers=self._get_headers(),
+                    headers=self._get_headers(api_key=api_key),
                     params=params,
                 )
 

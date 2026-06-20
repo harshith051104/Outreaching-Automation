@@ -60,7 +60,6 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
       "/dashboard/gmail": "Gmail Automation",
       "/dashboard/analytics": "Analytics",
       "/dashboard/tasks": "Task Tracker",
-      "/dashboard/flow-builder": "Visual Flow Builder",
       "/dashboard/chatbot": "AI Copilot",
       "/dashboard/settings": "Settings",
       "/dashboard/suggestions": "Suggestions Box",

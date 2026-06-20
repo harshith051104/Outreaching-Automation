@@ -25,6 +25,10 @@ class User(BaseModel):
     name: str
     hashed_password: str
     is_active: bool = True
+    # Role-Based Access Control: member | manager | admin
+    role: str = "member"
+    # display_name is matched against Google Sheets tab names for sync
+    display_name: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

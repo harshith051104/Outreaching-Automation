@@ -6,6 +6,7 @@ import { getDashboardStats as getTaskDashboardStats, DashboardStats } from "@/se
 import { getLeads } from "@/services/lead-api";
 import { getSignals, getAllOpportunities } from "@/services/signals-api";
 import Link from "next/link";
+import TeamOverviewWidget from "@/components/dashboard/TeamOverviewWidget";
 import { 
   Users, 
   CheckCircle, 
@@ -740,6 +741,63 @@ export default function DashboardPage() {
                 ))
               )}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Team Progress Section */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+        <TeamOverviewWidget />
+        {/* Quick Actions */}
+        <div style={{
+          borderRadius: '20px',
+          border: '1px solid rgba(124,92,255,0.2)',
+          background: 'rgba(15,15,30,0.6)',
+          padding: '24px',
+          backdropFilter: 'blur(12px)',
+          fontFamily: 'Inter, -apple-system, sans-serif',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+            <div style={{
+              width: '36px', height: '36px', borderRadius: '12px',
+              background: 'linear-gradient(135deg, rgba(16,185,129,0.3), rgba(16,185,129,0.1))',
+              border: '1px solid rgba(16,185,129,0.3)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px',
+            }}>⚡</div>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: '700', color: '#f5f3ff' }}>Quick Actions</div>
+              <div style={{ fontSize: '11px', color: 'rgba(167,139,250,0.6)', marginTop: '1px' }}>Jump straight to common tasks</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {[
+              { href: '/dashboard/outreach-tracker', label: 'View Outreach Tracker', icon: '📋', desc: 'See all lead checkboxes & progress' },
+              { href: '/dashboard/leads-discovery', label: 'Discover Leads', icon: '🔍', desc: 'AI-powered lead discovery' },
+              { href: '/dashboard/campaigns', label: 'Manage Campaigns', icon: '📢', desc: 'Create or edit campaigns' },
+              { href: '/dashboard/settings', label: 'Configure Integrations', icon: '🔑', desc: 'API keys, Gmail, LinkedIn, Sheets' },
+              { href: '/dashboard/chatbot', label: 'Talk to Elly', icon: '🤖', desc: 'AI assistant for automation' },
+            ].map((action) => (
+              <Link
+                key={action.href}
+                href={action.href}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '12px',
+                  padding: '12px 14px', borderRadius: '12px',
+                  border: '1px solid rgba(255,255,255,0.06)',
+                  background: 'rgba(255,255,255,0.03)',
+                  textDecoration: 'none', transition: 'all 0.2s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(124,92,255,0.08)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(124,92,255,0.3)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.06)'; }}
+              >
+                <span style={{ fontSize: '20px', flexShrink: 0 }}>{action.icon}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: '#f5f3ff' }}>{action.label}</div>
+                  <div style={{ fontSize: '10px', color: 'rgba(167,139,250,0.5)', marginTop: '1px' }}>{action.desc}</div>
+                </div>
+                <span style={{ fontSize: '12px', color: 'rgba(167,139,250,0.4)' }}>→</span>
+              </Link>
+            ))}
           </div>
         </div>
       </div>

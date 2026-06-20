@@ -155,6 +155,30 @@ class MongoDBClient:
 
         await safe_create_index(db.system_settings, "key", unique=True)
 
+        # ── New collections for Platform Upgrade ──────────────────────────
+        # Encrypted per-user API key vault
+        await safe_create_index(
+            db.user_integrations,
+            [("user_id", 1), ("provider", 1)],
+            unique=True,
+        )
+        await safe_create_index(db.user_integrations, "user_id")
+
+        # Lead activity timeline
+        await safe_create_index(db.lead_timeline, "lead_id")
+        await safe_create_index(db.lead_timeline, [("lead_id", 1), ("created_at", -1)])
+        await safe_create_index(db.lead_timeline, "user_id")
+
+        # Pending chatbot approval batches
+        await safe_create_index(db.pending_approvals, "user_id")
+        await safe_create_index(db.pending_approvals, [("user_id", 1), ("status", 1)])
+        await safe_create_index(db.pending_approvals, [("created_at", 1)], expireAfterSeconds=86400)
+
+        # Leads: tracking fields for fast filtering in the Outreach Tracker
+        await safe_create_index(db.leads, "assigned_user")
+        await safe_create_index(db.leads, [("campaign_id", 1), ("assigned_user", 1)])
+        await safe_create_index(db.leads, "last_activity_at")
+
         logger.info("MongoDB indexes checked/created")
 
     @property

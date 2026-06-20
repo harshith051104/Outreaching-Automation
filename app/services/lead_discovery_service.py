@@ -67,7 +67,7 @@ class LeadDiscoveryService:
             search_parts.append(query)
             
             search_query = " ".join([p for p in search_parts if p]).strip()
-            raw_leads = await self.tavily.discover_leads(query=search_query, limit=limit)
+            raw_leads = await self.tavily.discover_leads(query=search_query, limit=limit, user_id=user_id)
             if raw_leads:
                 stored = await self._verify_and_store_leads(
                     raw_leads, user_id, campaign_id, job_titles, "tavily"
@@ -82,7 +82,7 @@ class LeadDiscoveryService:
         try:
             urls = [item for item in query.split() if item.startswith("http")]
             if urls:
-                markdown = await self.firecrawl.scrape_url(urls[0])
+                markdown = await self.firecrawl.scrape_url(urls[0], user_id=user_id)
                 if markdown:
                     raw_leads = [{
                         "name": "Scraped Contact",
@@ -107,7 +107,8 @@ class LeadDiscoveryService:
                 job_titles=job_titles,
                 locations=locations,
                 industry=industry,
-                limit=limit
+                limit=limit,
+                user_id=user_id
             )
             if raw_leads:
                 stored = await self._verify_and_store_leads(
@@ -154,7 +155,7 @@ class LeadDiscoveryService:
             if email and not email.endswith("example.com") and not email.startswith("unknown"):
                 logger.info("Verifying email '%s' via Hunter...", email)
                 try:
-                    verification = await hunter.verify_email(email)
+                    verification = await hunter.verify_email(email, user_id=user_id)
                     if verification.get("status") == "verified":
                         verification_result = verification
                         if not verification.get("deliverable", True):

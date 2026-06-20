@@ -95,9 +95,11 @@ async def check_for_updates(user_id: str | None = None) -> Dict[str, Any]:
                         try:
                             process_result = await process_accepted_connection(uid, linkedin_url, contact_name)
                             if process_result.get("auto_dm_sent"):
+                                draft_info = process_result.get("auto_dm_result", {})
                                 logger.info(
-                                    "Auto-DM sent to %s after connection accepted",
+                                    "Post-acceptance draft created for %s (action_id=%s)",
                                     contact_name,
+                                    draft_info.get("action_id", "unknown"),
                                 )
                         except Exception as proc_err:
                             logger.error(
@@ -106,38 +108,70 @@ async def check_for_updates(user_id: str | None = None) -> Dict[str, Any]:
                                 proc_err,
                             )
 
-            # Trigger auto-reply generation if there are new unread messages
+                        # Auto-update outreach tracker: connection accepted milestone
+                        try:
+                            lead_doc = await db.leads.find_one({
+                                "user_id": uid,
+                                "$or": [
+                                    {"linkedin": linkedin_url},
+                                    {"linkedin_url": linkedin_url},
+                                ]
+                            })
+                            if lead_doc and lead_doc.get("id"):
+                                from app.services.outreach_tracker_service import update_checkboxes
+                                await update_checkboxes(
+                                    lead_id=lead_doc["id"],
+                                    user_id=uid,
+                                    updates={
+                                        "linkedin_connection_accepted": True,
+                                        "linkedin_first_message_sent": True,
+                                    },
+                                    trigger_sync=True,
+                                )
+                        except Exception as tracker_err:
+                            logger.debug("Tracker auto-update skipped for %s: %s", contact_name, tracker_err)
+
+
+            # Trigger auto-reply generation and stage update if there are new unread messages
             if new_msgs and isinstance(new_msgs, list):
                 try:
-                    # 1. Create dashboard notifications
-                    from app.models.notification import Notification
+                    from app.services.linkedin_notification_service import create_linkedin_notification
+                    from app.services.state_machine_hooks import on_lead_stage_entered
+
                     for msg_item in new_msgs:
                         if not msg_item.get("linkedin_url"):
                             continue
                         from_name = msg_item.get("from_name", "Unknown")
                         preview = msg_item.get("preview", "")
-                        notif_message = f"Received a reply from {from_name}: {preview}"
                         
-                        existing_notif = await db.notifications.find_one({
+                        # Find matching lead
+                        lead_doc = await db.leads.find_one({
                             "user_id": uid,
-                            "reference_type": "linkedin_reply",
-                            "reference_id": msg_item["linkedin_url"],
-                            "message": notif_message
+                            "$or": [
+                                {"linkedin": msg_item["linkedin_url"]},
+                                {"linkedin_url": msg_item["linkedin_url"]},
+                            ]
                         })
-                        if not existing_notif:
-                            notification = Notification(
+                        if lead_doc:
+                            # 1. Update status to linkedin_replied
+                            await db.leads.update_one(
+                                {"id": lead_doc["id"]},
+                                {"$set": {"status": "linkedin_replied", "updated_at": datetime.now(timezone.utc)}}
+                            )
+                            # 2. Transition decoupled stage to completed (updates checkboxes and sheets)
+                            await on_lead_stage_entered(lead_doc["id"], uid, "linkedin", "completed")
+                            
+                            # 3. Create customized notification matching requirements
+                            notif_message = f"{from_name} replied: \"{preview}\""
+                            await create_linkedin_notification(
                                 user_id=uid,
-                                sender_id=None,
-                                type="linkedin_reply",
                                 title="New LinkedIn Reply",
                                 message=notif_message,
-                                reference_id=msg_item["linkedin_url"],
-                                reference_type="linkedin_reply",
+                                reference_id=lead_doc["id"],
+                                type_name="linkedin_reply"
                             )
-                            await db.notifications.insert_one(notification.to_dict())
-                            logger.info("Created dashboard notification for LinkedIn reply from %s", from_name)
                 except Exception as notif_exc:
-                    logger.error("Failed to create dashboard notification for LinkedIn replies for user %s: %s", uid, notif_exc)
+                    logger.error("Failed to process LinkedIn replies for user %s: %s", uid, notif_exc)
 
                 try:
                     # Check if auto-reply is enabled in settings
@@ -246,94 +280,145 @@ async def process_accepted_connection(user_id: str, linkedin_url: str, contact_n
         ]
     })
     if lead:
+        # Store acceptance date in Lead
         await db.leads.update_one(
             {"id": lead["id"]},
-            {"$set": {"status": "linkedin_connected", "updated_at": now}}
+            {"$set": {
+                "linkedin_connected_at": now,
+                "updated_at": now
+            }}
         )
 
-    # Check if this connection was originally sent WITHOUT a note (due to Premium limit)
-    # If so, automatically send the intended message as a DM now that they're connected
-    auto_dm_sent = False
-    auto_dm_result = None
+        # Transition lead decoupled stage to connected (this updates checkboxes & sheets)
+        from app.services.state_machine_hooks import on_lead_stage_entered
+        await on_lead_stage_entered(lead["id"], user_id, "linkedin", "connected")
 
-    try:
-        original_action = await db.linkedin_actions.find_one({
-            "user_id": user_id,
-            "linkedin_url": linkedin_url,
-            "action_type": "connection_request",
-            "message_skipped": True,
-            "status": "executed",
-        })
-
-        if original_action and original_action.get("message"):
-            intended_message = original_action["message"]
-            logger.info(
-                "Connection to %s was sent without note. Sending intended message as DM now that they're connected.",
-                contact_name,
-            )
-
-            # Send the message via Playwright using the subprocess runner
-            from app.services.linkedin_outreach_service import send_message
-            auto_dm_result = await send_message(
-                linkedin_url=linkedin_url,
-                message=intended_message,
-                user_id=user_id,
-            )
-            auto_dm_sent = auto_dm_result.get("success", False)
-
-            if auto_dm_sent:
-                # Record this DM as a followup action
-                await db.linkedin_actions.insert_one({
-                    "id": generate_id(),
-                    "user_id": user_id,
-                    "lead_id": original_action.get("lead_id", ""),
-                    "linkedin_url": linkedin_url,
-                    "action_type": "followup",
-                    "status": "executed",
-                    "message": intended_message,
-                    "execution_result": auto_dm_result,
-                    "created_at": now,
-                    "executed_at": now,
-                    "auto_sent_on_accept": True,
-                    "original_connection_action_id": original_action.get("id", ""),
-                })
-
-                # Update relationship stage to message_sent
-                await db.linkedin_relationships.update_one(
-                    {"user_id": user_id, "linkedin_url": linkedin_url},
-                    {"$set": {
-                        "current_stage": "message_sent",
-                        "updated_at": datetime.now(timezone.utc),
-                    },
-                    "$push": {
-                        "stage_history": {
-                            "stage": "message_sent",
-                            "timestamp": datetime.now(timezone.utc),
-                            "note": "Auto-sent after connection accepted (original note skipped due to Premium limit)"
-                        }
-                    }},
-                )
-
-                logger.info("Auto-DM sent successfully to %s: %s", contact_name, auto_dm_result)
-            else:
-                logger.warning(
-                    "Auto-DM failed for %s (connection accepted): %s",
-                    contact_name,
-                    auto_dm_result.get("error", "Unknown error"),
-                )
-        else:
-            logger.debug(
-                "No skipped message found for %s - no auto-DM needed",
-                contact_name,
-            )
-    except Exception as auto_dm_err:
-        logger.error(
-            "Error sending auto-DM to %s after connection accepted: %s",
-            contact_name,
-            auto_dm_err,
+        # Generate notification matching user specifications with WebSocket broadcast
+        from app.services.linkedin_notification_service import create_linkedin_notification
+        await create_linkedin_notification(
+            user_id=user_id,
+            title="Connection Accepted",
+            message=f"{contact_name} accepted your connection request",
+            reference_id=lead["id"],
+            type_name="linkedin_accept"
         )
 
     logger.info("Processed accepted connection: %s (%s)", contact_name, linkedin_url)
+
+    # ── Post-acceptance: generate first message draft ──
+    auto_dm_sent = False
+    auto_dm_result = None
+    action_id = None
+
+    try:
+        # Check if auto-dm is enabled (default: True)
+        auto_dm_setting = await db.system_settings.find_one({"key": f"linkedin_auto_dm_{user_id}"})
+        auto_dm_enabled = auto_dm_setting.get("value", True) if auto_dm_setting else True
+
+        if auto_dm_enabled and lead:
+            # Deduplicate: skip if a pending draft already exists for this contact
+            existing_draft = await db.linkedin_actions.find_one({
+                "user_id": user_id,
+                "linkedin_url": linkedin_url,
+                "status": "pending_approval",
+            })
+            if existing_draft:
+                logger.info("Post-acceptance draft already exists for %s, skipping", contact_name)
+            else:
+                # Generate a personalized first-message draft via the orchestrator followup agent
+                from app.utils.id_generator import generate_id
+                action_id = generate_id()
+                lead_name = lead.get("name", contact_name)
+                lead_company = lead.get("company", "")
+                lead_role = lead.get("role", "")
+
+                logger.info("Generating post-acceptance first-message draft for %s", lead_name)
+
+                try:
+                    from orchestrator.engine import get_orchestrator
+                    orchestrator = await get_orchestrator()
+                    followup_result = await orchestrator.execute_workflow(
+                        "LinkedIn Followup Workflow",
+                        inputs={
+                            "linkedin_url": linkedin_url,
+                            "user_id": user_id,
+                            "lead_id": lead.get("id", ""),
+                            "lead_name": lead_name,
+                            "lead_company": lead_company,
+                            "lead_role": lead_role,
+                            "sequence_number": 1,
+                            "timestamp": now.isoformat(),
+                        },
+                        context={"user_id": user_id},
+                    )
+                    draft_message = followup_result.get("draft_message", "")
+                except Exception as wf_err:
+                    logger.warning("Followup workflow failed for post-acceptance draft, using fallback: %s", wf_err)
+                    draft_message = ""
+
+                # Fallback: generate a simple personalized greeting if workflow failed
+                if not draft_message:
+                    first = lead_name.split()[0] if lead_name else "there"
+                    draft_message = (
+                        f"Hi {first}, thanks for connecting! I'd love to learn more about "
+                        f"what you're working on at {lead_company or 'your company'}. "
+                        f"Would you be open to a quick chat?"
+                    )
+
+                # 1. Save to linkedin_actions (shows in pending queue)
+                action_doc = {
+                    "id": action_id,
+                    "user_id": user_id,
+                    "lead_id": lead.get("id", ""),
+                    "linkedin_url": linkedin_url,
+                    "action_type": "first_message",
+                    "status": "pending_approval",
+                    "message": draft_message,
+                    "created_at": now,
+                }
+                await db.linkedin_actions.insert_one(action_doc)
+
+                # 2. Save to pending_approvals (chatbot queue integration)
+                approval_doc = {
+                    "action_id": action_id,
+                    "user_id": user_id,
+                    "action_type": "linkedin_messages",
+                    "description": f"First message to {contact_name} after connection accepted",
+                    "count": 1,
+                    "items": [linkedin_url],
+                    "payload": {
+                        "action_id": action_id,
+                        "lead_ids": [lead.get("id", "")],
+                        "message": draft_message,
+                        "linkedin_url": linkedin_url,
+                    },
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                await db.pending_approvals.insert_one(approval_doc)
+
+                auto_dm_sent = True
+                auto_dm_result = {
+                    "action_id": action_id,
+                    "draft_message": draft_message,
+                    "status": "pending_approval",
+                }
+
+                # Create notification so user knows a draft is waiting
+                from app.services.linkedin_notification_service import create_linkedin_notification
+                await create_linkedin_notification(
+                    user_id=user_id,
+                    title="First Message Draft Ready",
+                    message=f"Draft message for {contact_name} is ready for your approval",
+                    reference_id=lead.get("id", ""),
+                    type_name="linkedin_draft_ready",
+                )
+
+                logger.info("Post-acceptance draft created for %s (action_id=%s)", lead_name, action_id)
+
+    except Exception as draft_err:
+        logger.error("Failed to generate post-acceptance draft for %s: %s", contact_name, draft_err)
 
     return {
         "processed": True,
@@ -342,4 +427,5 @@ async def process_accepted_connection(user_id: str, linkedin_url: str, contact_n
         "new_stage": "connection_accepted",
         "auto_dm_sent": auto_dm_sent,
         "auto_dm_result": auto_dm_result,
+        "action_id": action_id,
     }

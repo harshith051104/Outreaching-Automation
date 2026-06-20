@@ -76,3 +76,34 @@ async def get_optional_user(
         pass
 
     return None
+
+
+def require_role(*allowed_roles: str):
+    """
+    Dependency factory that enforces role-based access control.
+
+    Usage::
+
+        @router.get("/admin-only")
+        async def admin_endpoint(user = Depends(require_role("admin"))):
+            ...
+
+        @router.get("/manager-or-admin")
+        async def manager_endpoint(user = Depends(require_role("manager", "admin"))):
+            ...
+    """
+    async def _check(current_user: dict = Depends(get_current_user)) -> dict:
+        user_role = current_user.get("role", "member")
+        if user_role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Requires one of: {', '.join(allowed_roles)}. "
+                       f"Your role: {user_role}.",
+            )
+        return current_user
+    return _check
+
+
+# Convenience shorthand dependencies
+get_manager_user = require_role("manager", "admin")
+get_admin_user = require_role("admin")

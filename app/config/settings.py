@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
+    LLM_PROVIDER: str = "nvidia"
+    NVIDIA_NIM_API_KEY: str = ""
+    NVIDIA_NIM_MODEL: str = "qwen/qwen3.5-122b-a10b"
+
+    XIAOMI_API_KEY: str = ""
+    XIAOMI_MODEL: str = "mimo-v2.5"
+
     APOLLO_API_KEY: str = ""
     HUNTER_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
@@ -51,6 +58,7 @@ class Settings(BaseSettings):
     BACKEND_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:3000"
     RATE_LIMIT_PER_MINUTE: int = 300
+    LINKEDIN_HEADLESS: bool = False
 
     model_config = {
         "env_file": ".env",

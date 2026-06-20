@@ -58,6 +58,28 @@ steps:
         created_at: "{{inputs.timestamp}}"
     output_var: draft_result
 
+  - id: create_pending_approval
+    action: mongodb_insert
+    input:
+      collection: pending_approvals
+      document:
+        action_id: "{{inputs.action_id}}"
+        user_id: "{{inputs.user_id}}"
+        action_type: "linkedin_connections"
+        description: "Send connection request to {{steps.research_profile.output.profile_data.name}} ({{inputs.linkedin_url}})"
+        count: 1
+        items:
+          - "{{inputs.linkedin_url}}"
+        payload:
+          lead_ids:
+            - "{{inputs.lead_id}}"
+          note: "{{steps.generate_note.output.message_text}}"
+          linkedin_url: "{{inputs.linkedin_url}}"
+        status: "pending"
+        created_at: "{{inputs.timestamp}}"
+        updated_at: "{{inputs.timestamp}}"
+    output_var: approval_result
+
   - id: update_relationship
     action: linkedin_update_relationship
     input:

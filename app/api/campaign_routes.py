@@ -22,6 +22,15 @@ from app.services.campaign_service import (
 router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 
 
+
+@router.get("/check_formatting")
+async def check_formatting():
+    from app.config.mongodb_config import get_database
+    db = await get_database()
+    emails = await db.emails.find({"status": "sent"}).sort("sent_at", -1).limit(5).to_list(length=5)
+    return [{"to": e["to"], "subject": e["subject"], "body_html": e["body_html"]} for e in emails]
+
+
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED, summary="Create a new campaign")
 async def create(
     data: CampaignCreate,
@@ -96,3 +105,37 @@ async def stats(
     """Return aggregated open/click/reply stats for a campaign."""
     await get_campaign(campaign_id, current_user["id"])
     return await get_campaign_stats(campaign_id)
+
+
+@router.get("/debug/dump", summary="Debug DB Dump")
+async def debug_dump():
+    from app.config.mongodb_config import get_database
+    from fastapi.responses import PlainTextResponse
+    import json
+    import os
+    db = await get_database()
+    campaigns = await db.campaigns.find({}, {"_id": 0}).to_list(length=100)
+    leads_summary = {}
+    for camp in campaigns:
+        camp_id = camp.get("id")
+        leads_count = await db.leads.count_documents({"campaign_id": camp_id})
+        leads_summary[camp_id] = leads_count
+    sample_leads = await db.leads.find({}, {"_id": 0}).limit(10).to_list(length=10)
+    emails = await db.emails.find({}, {"_id": 0}).to_list(length=100)
+    gmail_accounts = await db.gmail_accounts.find({}, {"_id": 0, "access_token": 0, "refresh_token": 0}).to_list(length=100)
+    
+    data = {
+        "campaigns": campaigns,
+        "leads_summary": leads_summary,
+        "sample_leads": sample_leads,
+        "emails": emails,
+        "gmail_accounts": gmail_accounts
+    }
+    
+    # Save to a file in the workspace
+    filepath = "c:/Users/sriha/My work/Outreach/ai_outreach_v2_md_agents/scratch/db_dump.json"
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+        
+    return PlainTextResponse(f"Saved database dump to {filepath}")

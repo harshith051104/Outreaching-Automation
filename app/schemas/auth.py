@@ -5,6 +5,7 @@ Pydantic schemas for authentication endpoints (register, login, token).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -14,6 +15,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     name: str = Field(..., min_length=1, max_length=200)
+    display_name: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -33,5 +35,10 @@ class UserResponse(BaseModel):
     id: str
     email: str
     name: str
-    is_active: bool
-    created_at: datetime
+    display_name: str = ""
+    role: str = "member"
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+
+    class Config:
+        extra = "ignore"

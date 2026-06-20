@@ -5,6 +5,7 @@ Groq provides fast inference with the llama-3.3-70b-versatile model.
 """
 
 import logging
+from typing import Any
 from groq import Groq
 from app.config.settings import settings
 
@@ -60,12 +61,68 @@ def get_llm_disabled() -> bool:
         del frame
     return _disabled_sections.get("linkedin", False)
 
-def get_groq_client() -> Groq:
-    """Get or initialize the Groq client singleton."""
+def run_async_fallback(coro):
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import threading
+        from queue import Queue
+
+        q = Queue()
+
+        def worker():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                res = new_loop.run_until_complete(coro)
+                q.put((True, res))
+            except Exception as e:
+                q.put((False, e))
+            finally:
+                new_loop.close()
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        success, val = q.get()
+        if success:
+            return val
+        raise val
+    else:
+        new_loop = asyncio.new_event_loop()
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
+_user_groq_clients = {}
+
+def get_groq_client(user_id: str | None = None) -> Groq:
+    """Get the Groq client, resolving per-user keys if user_id is provided."""
     global _groq_client
-    if _groq_client is None:
-        _groq_client = Groq(api_key=settings.GROQ_API_KEY)
-    return _groq_client
+    if not user_id:
+        if _groq_client is None:
+            _groq_client = Groq(api_key=settings.GROQ_API_KEY)
+        return _groq_client
+
+    # Resolve api key for user_id
+    from app.services.integrations_service import get_api_key_sync
+    
+    # Run sync get_api_key
+    api_key = get_api_key_sync(user_id, "groq", settings.GROQ_API_KEY)
+    
+    if not api_key or api_key == settings.GROQ_API_KEY:
+        if _groq_client is None:
+            _groq_client = Groq(api_key=settings.GROQ_API_KEY)
+        return _groq_client
+
+    if api_key not in _user_groq_clients:
+        _user_groq_clients[api_key] = Groq(api_key=api_key)
+    return _user_groq_clients[api_key]
 
 def groq_inference(
     messages: list[dict[str, str]],
@@ -73,9 +130,10 @@ def groq_inference(
     temperature: float = 0.7,
     max_tokens: int = 2048,
     section: str | None = None,
+    user_id: str | None = None,
 ) -> str:
     """
-    Execute direct chat completions via Groq.
+    Execute direct chat completions via the active provider.
     """
     if not section:
         # Auto-detect from prompt contents or stack
@@ -136,17 +194,211 @@ def groq_inference(
         else:
             return f"This is a mock LLM response generated because LLM calls are paused for {section}."
 
-    client = get_groq_client()
-    model_name = model or settings.GROQ_MODEL or "llama-3.3-70b-versatile"
+    provider = getattr(settings, "LLM_PROVIDER", "groq").lower()
     
+    if provider == "nvidia":
+        from app.services.integrations_service import get_api_key_sync
+        api_key = get_api_key_sync(user_id, "nvidia", settings.NVIDIA_NIM_API_KEY)
+        model_name = model or settings.NVIDIA_NIM_MODEL or "qwen/qwen3.5-122b-a10b"
+        completion = openai_compatible_inference(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=api_key,
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        return completion.choices[0].message.content or ""
+        
+    elif provider == "xiaomi":
+        from app.services.integrations_service import get_api_key_sync
+        api_key = get_api_key_sync(user_id, "xiaomi", settings.XIAOMI_API_KEY)
+        model_name = model or settings.XIAOMI_MODEL or "mimo-v2.5"
+        completion = openai_compatible_inference(
+            base_url="https://api.xiaomimimo.com/v1",
+            api_key=api_key,
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        return completion.choices[0].message.content or ""
+        
+    else:
+        client = get_groq_client(user_id)
+        model_name = model or settings.GROQ_MODEL or "llama-3.3-70b-versatile"
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            logger.error(f"Groq inference failed: {e}")
+            raise e
+
+# ── OpenAI Compatible Custom Client Mock ────────────────────────────────────
+
+class NvidiaToolCallFunction:
+    def __init__(self, name: str, arguments: str):
+        self.name = name
+        self.arguments = arguments
+
+class NvidiaToolCall:
+    def __init__(self, id: str, type: str, function: NvidiaToolCallFunction):
+        self.id = id
+        self.type = type
+        self.function = function
+
+class NvidiaMessage:
+    def __init__(self, content: str | None, tool_calls: list | None = None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+class NvidiaChoice:
+    def __init__(self, message: NvidiaMessage):
+        self.message = message
+
+class NvidiaCompletion:
+    def __init__(self, choices: list[NvidiaChoice]):
+        self.choices = choices
+
+def openai_compatible_inference(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+    tools: list | None = None,
+    tool_choice: str | dict | None = None,
+) -> NvidiaCompletion:
+    import httpx
+    import json
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if tools:
+        payload["tools"] = tools
+    if tool_choice:
+        payload["tool_choice"] = tool_choice
+        
     try:
-        response = client.chat.completions.create(
+        response = httpx.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=60.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        choices = []
+        for choice_data in data.get("choices", []):
+            msg_data = choice_data.get("message", {})
+            content = msg_data.get("content")
+            
+            tool_calls = None
+            raw_tool_calls = msg_data.get("tool_calls")
+            if raw_tool_calls:
+                tool_calls = []
+                for tc in raw_tool_calls:
+                    func_data = tc.get("function", {})
+                    args_val = func_data.get("arguments", "{}")
+                    if isinstance(args_val, dict):
+                        args_str = json.dumps(args_val)
+                    else:
+                        args_str = str(args_val)
+                        
+                    func_obj = NvidiaToolCallFunction(
+                        name=func_data.get("name", ""),
+                        arguments=args_str
+                    )
+                    tool_calls.append(NvidiaToolCall(
+                        id=tc.get("id", ""),
+                        type=tc.get("type", "function"),
+                        function=func_obj
+                    ))
+            
+            msg_obj = NvidiaMessage(content=content, tool_calls=tool_calls)
+            choices.append(NvidiaChoice(message=msg_obj))
+            
+        return NvidiaCompletion(choices=choices)
+    except Exception as e:
+        logger.error(f"Inference failed for {base_url} ({model}): {e}")
+        raise e
+
+def llm_chat_completion(
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    provider: str | None = None,
+    tools: list | None = None,
+    tool_choice: str | dict | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    user_id: str | None = None,
+) -> Any:
+    """
+    Execute chat completions dynamically based on provider and model.
+    """
+    active_provider = provider
+    if not active_provider:
+        active_provider = getattr(settings, "LLM_PROVIDER", "nvidia")
+    active_provider = active_provider.lower()
+    
+    if active_provider == "nvidia":
+        from app.services.integrations_service import get_api_key_sync
+        api_key = get_api_key_sync(user_id, "nvidia", settings.NVIDIA_NIM_API_KEY)
+        model_name = model or settings.NVIDIA_NIM_MODEL or "qwen/qwen3.5-122b-a10b"
+        return openai_compatible_inference(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=api_key,
             model=model_name,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice
         )
-        return response.choices[0].message.content or ""
-    except Exception as e:
-        logger.error(f"Groq inference failed: {e}")
-        raise e
+    elif active_provider == "xiaomi":
+        from app.services.integrations_service import get_api_key_sync
+        api_key = get_api_key_sync(user_id, "xiaomi", settings.XIAOMI_API_KEY)
+        model_name = model or settings.XIAOMI_MODEL or "mimo-v2.5"
+        return openai_compatible_inference(
+            base_url="https://api.xiaomimimo.com/v1",
+            api_key=api_key,
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice
+        )
+    else:
+        # groq
+        client = get_groq_client(user_id)
+        model_name = model or settings.GROQ_MODEL or "llama-3.3-70b-versatile"
+        
+        kwargs = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
+            
+        return client.chat.completions.create(**kwargs)

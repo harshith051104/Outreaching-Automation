@@ -22,7 +22,8 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-LINKEDIN_HEADLESS = os.getenv("LINKEDIN_HEADLESS", "true").lower() in ("true", "1", "yes")
+from app.config.settings import settings
+LINKEDIN_HEADLESS = settings.LINKEDIN_HEADLESS
 
 
 async def _safe_query_selector_text(page, selectors: List[str], default: str = "") -> str:
@@ -338,12 +339,16 @@ async def run_linkedin_action_in_subprocess(
     import subprocess
 
     action_timeouts = {
-        "send_message": 60,
-        "send_message_by_name": 90,
+        "send_connection_request": 300,
+        "send_message": 90,
+        "send_message_by_name": 120,
         "scrape_profile": 120,
         "get_pending_invitations": 120,
+        "follow_profile": 120,
+        "start_session": 180,
+        "validate_session": 60,
     }
-    timeout_seconds = action_timeouts.get(action, 180)
+    timeout_seconds = action_timeouts.get(action, 240)
     
     def _run():
         cmd = [
@@ -540,18 +545,17 @@ async def disconnect_session(user_id: str) -> Dict[str, Any]:
 # ── Profile Scraping ───────────────────────────────────────────────────────
 
 
-@proactor_isolated
-async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Scrape profile using Playwright in an isolated thread loop."""
+async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]], page=None) -> Dict[str, Any]:
+    """Scrape profile using Playwright."""
     pw = None
     browser = None
-    page = None
     try:
-        async_playwright = await _get_playwright()
-        pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
-        context = await _create_stealth_context(browser, cookies=cookies)
-        page = await context.new_page()
+        if page is None:
+            async_playwright = await _get_playwright()
+            pw = await async_playwright().start()
+            browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
+            context = await _create_stealth_context(browser, cookies=cookies)
+            page = await context.new_page()
         await _random_delay(1.0, 2.0)
         try:
             await page.goto(linkedin_url, wait_until="domcontentloaded", timeout=15000)
@@ -828,16 +832,17 @@ async def _scrape_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
             "profile_url": linkedin_url
         }
     finally:
-        try:
-            if browser:
-                await browser.close()
-        except Exception:
-            pass
-        try:
-            if pw:
-                await pw.stop()
-        except Exception:
-            pass
+        if pw:
+            try:
+                if browser:
+                    await browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    await pw.stop()
+            except Exception:
+                pass
 
 
 async def scrape_profile(linkedin_url: str, user_id: str) -> Dict[str, Any]:
@@ -1036,17 +1041,17 @@ async def _find_and_click_follow_button(page, containers: List[str]) -> bool:
     return follow_clicked
 
 
-@proactor_isolated
-async def _follow_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Follow a profile or company using Playwright in an isolated thread loop."""
+async def _follow_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]], page=None) -> Dict[str, Any]:
+    """Follow a profile or company using Playwright."""
     pw = None
     browser = None
     try:
-        async_playwright = await _get_playwright()
-        pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
-        context = await _create_stealth_context(browser, cookies=cookies)
-        page = await context.new_page()
+        if page is None:
+            async_playwright = await _get_playwright()
+            pw = await async_playwright().start()
+            browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
+            context = await _create_stealth_context(browser, cookies=cookies)
+            page = await context.new_page()
         await _random_delay(2, 4)
         try:
             await page.goto(linkedin_url, wait_until="domcontentloaded", timeout=45000)
@@ -1133,16 +1138,17 @@ async def _follow_profile_pw(linkedin_url: str, cookies: List[Dict[str, Any]]) -
         err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
         return {"success": False, "error": err_msg}
     finally:
-        try:
-            if browser:
-                await browser.close()
-        except Exception:
-            pass
-        try:
-            if pw:
-                await pw.stop()
-        except Exception:
-            pass
+        if pw:
+            try:
+                if browser:
+                    await browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    await pw.stop()
+            except Exception:
+                pass
 
 
 async def follow_profile(linkedin_url: str, user_id: str) -> Dict[str, Any]:
@@ -1168,201 +1174,255 @@ async def follow_profile(linkedin_url: str, user_id: str) -> Dict[str, Any]:
 # ── Connection Requests ────────────────────────────────────────────────────
 
 
-async def _find_and_click_connect_button(page, containers: List[str]) -> bool:
-    """Helper to locate and click the 'Connect' button on a LinkedIn profile page using Strategies A-F."""
-    import re
+async def _find_and_click_connect_button(page) -> tuple[bool, int | None, str | None]:
+    """
+    Locate and click the LinkedIn 'Connect' button, strictly scoped to the profile card.
+    Supports Scenarios 1, 2, and 3.
+    Returns:
+        (connect_clicked, scenario, error_reason)
+    """
     connect_clicked = False
+    scenario = None
+    error_reason = None
 
-    # Strategy A: Use Playwright get_by_role Connect button
-    for container in containers:
+    # Find the first visible profile top card action area
+    action_area_selectors = [
+        "div.pvs-profile-actions",
+        "div.pv-top-card-v2-section__actions",
+        "div.pv-top-card-layout__actions",
+        ".pv-top-card-v2-section",
+        "main.scaffold-layout__main section.artdeco-card"
+    ]
+    
+    active_area = None
+    for area_sel in action_area_selectors:
         try:
-            if container:
-                parent = page.locator(container).first
-                if await parent.is_visible(timeout=2000):
-                    loc = parent.get_by_role("button", name="Connect", exact=True).first
-            else:
-                loc = page.get_by_role("button", name="Connect", exact=True).first
-            
-            if loc and await loc.is_visible(timeout=2000):
-                await loc.scroll_into_view_if_needed()
-                await loc.click(force=True, timeout=3000)
-                connect_clicked = True
-                logger.info("Connect button clicked using Strategy A (get_by_role Connect, container: %s)", container)
+            loc = page.locator(area_sel).first
+            if await loc.is_visible(timeout=1000):
+                active_area = loc
+                logger.info("Found visible profile action area: %s", area_sel)
                 break
         except Exception:
             pass
 
-    # Strategy B: Try get_by_role with regex Connect/Invite
-    if not connect_clicked:
-        for container in containers:
-            try:
-                if container:
-                    parent = page.locator(container).first
-                    if await parent.is_visible(timeout=2000):
-                        loc = parent.get_by_role("button", name=re.compile(r"Connect|Invite", re.IGNORECASE)).first
-                else:
-                    loc = page.get_by_role("button", name=re.compile(r"Connect|Invite", re.IGNORECASE)).first
+    # If no action area is found, fall back to page
+    if not active_area:
+        logger.warning("No profile action area found! Falling back to page-wide search.")
+        active_area = page
+
+    # Let's check for a direct 'Connect' button (Scenario 1)
+    connect_btn = None
+    connect_selectors = [
+        "button[aria-label*='Invite'][aria-label*='connect']",
+        "button[aria-label*='Connect']",
+        "button[aria-label*='connect']",
+        "button[aria-label*='Invite']",
+        "button:has-text('Connect')",
+        "button:has-text('Invite')",
+    ]
+    for sel in connect_selectors:
+        try:
+            loc = active_area.locator(sel).first
+            if await loc.is_visible(timeout=500):
+                connect_btn = loc
+                break
+        except Exception:
+            pass
+
+    # Let's check for a direct 'Follow' button (Scenario 2 candidate)
+    follow_btn = None
+    follow_selectors = [
+        "button:has-text('Follow')",
+        "button[aria-label*='Follow']",
+        "button[aria-label*='follow']",
+    ]
+    for sel in follow_selectors:
+        try:
+            loc = active_area.locator(sel).first
+            if await loc.is_visible(timeout=500):
+                text = await loc.inner_text()
+                if "following" not in text.lower():
+                    follow_btn = loc
+                    break
+        except Exception:
+            pass
+
+    if connect_btn:
+        # Scenario 1: Connect Button Visible
+        scenario = 1
+        logger.info("Scenario 1: Direct Connect button visible.")
+        try:
+            await _take_playwright_screenshot(page, "before_click_direct")
+            await connect_btn.scroll_into_view_if_needed()
+            await connect_btn.click(force=True, timeout=3000)
+            await _random_delay(1.5, 2.5)
+            await _take_playwright_screenshot(page, "after_click_direct")
+            connect_clicked = True
+            logger.info("Scenario 1: Connect button clicked directly.")
+        except Exception as e:
+            logger.exception("Failed to click direct Connect button: %s", e)
+            error_reason = f"Scenario 1 click failed: {str(e)}"
+    
+    elif follow_btn:
+        # Scenario 2: Follow Button Visible
+        scenario = 2
+        logger.info("Scenario 2: Follow button visible. Clicking Follow first...")
+        try:
+            await _take_playwright_screenshot(page, "before_click_follow")
+            await follow_btn.scroll_into_view_if_needed()
+            await follow_btn.click(force=True, timeout=3000)
+            await _random_delay(2.0, 3.0)
+            await _take_playwright_screenshot(page, "after_click_follow")
+
+            # Click More menu
+            more_btn = None
+            more_selectors = [
+                "button[aria-label='More actions']",
+                "button:has-text('More')",
+                "button[aria-label='More']",
+            ]
+            for more_sel in more_selectors:
+                loc = active_area.locator(more_sel).first
+                if await loc.is_visible(timeout=1000):
+                    more_btn = loc
+                    break
+            
+            if more_btn:
+                await more_btn.click(force=True, timeout=3000)
+                logger.info("Scenario 2: Clicked More dropdown.")
+                await _random_delay(1.5, 2.5)
+                await _take_playwright_screenshot(page, "after_more_click_scenario_2")
+
+                # Find Connect option in the dropdown list
+                dropdown_connect_selectors = [
+                    "div[role='menu'] *:has-text('Connect')",
+                    "div.artdeco-dropdown__content *:has-text('Connect')",
+                    "ul.artdeco-dropdown__content-inner li:has-text('Connect')",
+                    "*[role='menuitem']:has-text('Connect')",
+                    "li:has-text('Connect')",
+                    "span:has-text('Connect')",
+                ]
+                for conn_sel in dropdown_connect_selectors:
+                    try:
+                        conn_loc = page.locator(conn_sel).first
+                        if await conn_loc.is_visible(timeout=1000):
+                            await conn_loc.click(force=True, timeout=3000)
+                            connect_clicked = True
+                            logger.info("Scenario 2: Clicked Connect inside More dropdown (%s)", conn_sel)
+                            await _random_delay(1.5, 2.5)
+                            await _take_playwright_screenshot(page, "after_connect_click_scenario_2")
+                            break
+                    except Exception:
+                        pass
                 
-                if loc and await loc.is_visible(timeout=2000):
-                    await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=3000)
-                    connect_clicked = True
-                    logger.info("Connect button clicked using Strategy B (get_by_role regex Connect/Invite, container: %s)", container)
+                if not connect_clicked:
+                    error_reason = "Connect option not found in More dropdown (Scenario 2)"
+                    # Close dropdown if it didn't succeed
+                    try:
+                        await page.keyboard.press("Escape")
+                        await _random_delay(0.3, 0.5)
+                    except Exception:
+                        pass
+            else:
+                error_reason = "More button not found (Scenario 2)"
+        except Exception as e:
+            logger.exception("Scenario 2 execution failed: %s", e)
+            error_reason = f"Scenario 2 failed: {str(e)}"
+
+    else:
+        # Scenario 3: Connect Hidden in More Menu
+        scenario = 3
+        logger.info("Scenario 3: Connect hidden in More menu.")
+        try:
+            # Click More menu
+            more_btn = None
+            more_selectors = [
+                "button[aria-label='More actions']",
+                "button:has-text('More')",
+                "button[aria-label='More']",
+            ]
+            for more_sel in more_selectors:
+                loc = active_area.locator(more_sel).first
+                if await loc.is_visible(timeout=1000):
+                    more_btn = loc
                     break
-            except Exception:
-                pass
+            
+            if more_btn:
+                await more_btn.click(force=True, timeout=3000)
+                logger.info("Scenario 3: Clicked More dropdown.")
+                await _random_delay(1.5, 2.5)
+                await _take_playwright_screenshot(page, "after_more_click_scenario_3")
 
-    # Strategy C: Direct aria-label containing "Invite" or "Connect"
-    if not connect_clicked:
-        aria_pats = [
-            "button[aria-label*='Invite'][aria-label*='connect']",
-            "button[aria-label*='Connect']",
-            "button[aria-label*='connect']",
-            "button[aria-label*='Invite']",
-        ]
-        for container in containers:
-            for aria_pat in aria_pats:
-                selector = f"{container} {aria_pat}".strip() if container else aria_pat
-                loc = page.locator(selector).first
-                try:
-                    await loc.wait_for(state="visible", timeout=2000)
-                    await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=3000)
-                    connect_clicked = True
-                    logger.info("Connect button clicked using Strategy C (aria-label: %s)", selector)
-                    break
-                except Exception:
-                    continue
-            if connect_clicked:
-                break
+                # Find Connect option in the dropdown list
+                dropdown_connect_selectors = [
+                    "div[role='menu'] *:has-text('Connect')",
+                    "div.artdeco-dropdown__content *:has-text('Connect')",
+                    "ul.artdeco-dropdown__content-inner li:has-text('Connect')",
+                    "*[role='menuitem']:has-text('Connect')",
+                    "li:has-text('Connect')",
+                    "span:has-text('Connect')",
+                ]
+                for conn_sel in dropdown_connect_selectors:
+                    try:
+                        conn_loc = page.locator(conn_sel).first
+                        if await conn_loc.is_visible(timeout=1000):
+                            await conn_loc.click(force=True, timeout=3000)
+                            connect_clicked = True
+                            logger.info("Scenario 3: Clicked Connect inside More dropdown (%s)", conn_sel)
+                            await _random_delay(1.5, 2.5)
+                            await _take_playwright_screenshot(page, "after_connect_click_scenario_3")
+                            break
+                    except Exception:
+                        pass
+                
+                if not connect_clicked:
+                    error_reason = "Connect option not found in More dropdown"
+                    # Close dropdown if it didn't succeed
+                    try:
+                        await page.keyboard.press("Escape")
+                        await _random_delay(0.3, 0.5)
+                    except Exception:
+                        pass
+            else:
+                error_reason = "More button not found"
+        except Exception as e:
+            logger.exception("Scenario 3 execution failed: %s", e)
+            error_reason = f"Scenario 3 failed: {str(e)}"
 
-    # Strategy D: Visible button whose text contains Connect/Invite
-    if not connect_clicked:
-        pats = [
-            "button:has-text('Connect')",
-            "button:has-text('Invite')",
-            "span.artdeco-button__text:has-text('Connect')",
-            "span.artdeco-button__text:has-text('Invite')",
-            "a:has-text('Connect')",
-            "a:has-text('Invite')",
-        ]
-        for container in containers:
-            for pat in pats:
-                selector = f"{container} {pat}".strip() if container else pat
-                loc = page.locator(selector).first
-                try:
-                    await loc.wait_for(state="visible", timeout=2000)
-                    await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=3000)
-                    connect_clicked = True
-                    logger.info("Connect button clicked using Strategy D (has-text: %s)", selector)
-                    break
-                except Exception:
-                    continue
-            if connect_clicked:
-                break
-
-    # Strategy E: "More actions" dropdown → "Connect" menu item
-    if not connect_clicked:
-        more_selectors = [
-            "button[aria-label='More actions']",
-            "button[aria-label='More']",
-            "button[aria-label*='More actions']",
-            "button[aria-label*='More']",
-            "button[aria-label*='actions']",
-            "button:has-text('More actions')",
-            "button:has-text('More')",
-            "button.pv-s-profile-actions__overflow-toggle",
-            "button.artdeco-dropdown__trigger",
-            "button.artdeco-button--2",
-            "div.pvs-profile-actions button[aria-haspopup='menu']",
-            "div.pvs-profile-actions button:has-text('More')"
-        ]
-        for container in containers:
-            for selector in more_selectors:
-                sel = f"{container} {selector}".strip() if container else selector
-                more_loc = page.locator(sel).first
-                try:
-                    await more_loc.wait_for(state="visible", timeout=5000)
-                    await more_loc.scroll_into_view_if_needed()
-                    await more_loc.click(force=True, timeout=8000)
-                    await _random_delay(2.0, 4.0)  # Wait for dropdown menu to fully open
-
-                    # Try to find Connect in the dropdown menu
-                    menu_connect_selectors = [
-                        "div[role='menu'] *[role='menuitem']:has-text('Connect')",
-                        "div[role='menu'] button:has-text('Connect')",
-                        "div[role='menu'] span:has-text('Connect')",
-                        "div[role='menu'] div:has-text('Connect')",
-                        "div.artdeco-dropdown__content *[role='menuitem']:has-text('Connect')",
-                        "div.artdeco-dropdown__content button:has-text('Connect')",
-                        "div.artdeco-dropdown__content span:has-text('Connect')",
-                        "div.artdeco-dropdown__content div:has-text('Connect')",
-                        "*[role='menuitem'] span:has-text('Connect')",
-                        "*[role='menuitem'] button:has-text('Connect')",
-                        "*[role='menuitem']:has-text('Connect')",
-                        "span:has-text('Connect')",
-                        "button:has-text('Connect')",
-                        "div:has-text('Connect')"
-                    ]
-                    for menu_sel in menu_connect_selectors:
-                        connect_item = page.locator(menu_sel).first
-                        try:
-                            if await connect_item.is_visible(timeout=5000):
-                                await connect_item.scroll_into_view_if_needed()
-                                await connect_item.click(force=True, timeout=5000)
-                                connect_clicked = True
-                                logger.info("Connect button clicked using Strategy E (%s)", menu_sel)
-                                await _random_delay(1.5, 3.0)  # Wait for modal dialog
-                                break
-                        except Exception as e:
-                            logger.debug("Failed menu connect click for selector %s: %s", menu_sel, e)
-                            continue
-
-                    if connect_clicked:
-                        break
-                except Exception as e:
-                    logger.debug("Failed 'More' button click flow: %s", e)
-                    continue
-            if connect_clicked:
-                break
-
-    # Strategy F: Try clicking any button with "Connect" in aria-label or title
-    if not connect_clicked:
-        for container in containers:
-            try:
-                sel = f"{container} button[title*='Connect']".strip() if container else "button[title*='Connect']"
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=2000):
-                    await loc.click(timeout=3000)
-                    connect_clicked = True
-                    logger.info("Connect button clicked using Strategy F (title attribute)")
-                    break
-            except Exception:
-                pass
-
-    return connect_clicked
+    return connect_clicked, scenario, error_reason
 
 
-@proactor_isolated
-async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Send connection request using Playwright in an isolated thread loop."""
+
+
+
+async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: List[Dict[str, Any]], page=None) -> Dict[str, Any]:
+    """Send connection request using Playwright."""
+    # Force 'Send without a note' by clearing the note for the Playwright invitation dialog itself
+    note = ""
     pw = None
     browser = None
     try:
-        async_playwright = await _get_playwright()
-        pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
-        context = await _create_stealth_context(browser, cookies=cookies)
-        page = await context.new_page()
-        await _random_delay(2, 4)
+        if page is None:
+            logger.info("Playwright helper: starting async_playwright...")
+            async_playwright = await _get_playwright()
+            pw = await async_playwright().start()
+            logger.info("Playwright helper: async_playwright started, launching browser...")
+            browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
+            logger.info("Playwright helper: browser launched, creating context...")
+            context = await _create_stealth_context(browser, cookies=cookies)
+            logger.info("Playwright helper: context created, creating new page...")
+            page = await context.new_page()
+            logger.info("Playwright helper: new page created successfully")
+        await _random_delay(1, 2)
         try:
+            logger.info("Playwright helper: navigating to profile URL %s ...", linkedin_url)
             await page.goto(linkedin_url, wait_until="domcontentloaded", timeout=45000)
+            logger.info("Playwright helper: navigation completed")
         except Exception as e:
             logger.warning("page.goto connection profile timed out, attempting to proceed anyway: %s", e)
-        await _random_delay(2, 5)
+        await _random_delay(1, 2)
         try:
-            await page.locator("main.scaffold-layout__main, div.pv-top-card-v2-section, .pvs-profile-actions, .global-nav").first.wait_for(state="visible", timeout=20000)
+            await page.locator("main.scaffold-layout__main, div.pv-top-card-v2-section, .pvs-profile-actions, .global-nav").first.wait_for(state="visible", timeout=15000)
             logger.info("Profile page layout detected as visible")
         except Exception as e:
             logger.warning("Timed out waiting for profile layout elements: %s", e)
@@ -1381,20 +1441,10 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
         except Exception:
             pass
 
-        # --- Robust Connect button detection ---
-        # Containers to search inside first, falling back to page-wide (empty string)
-        containers = [
-            "div.pvs-profile-actions",
-            "div.pv-top-card-v2-section__actions",
-            "div.pv-top-card-layout__actions",
-            ".pv-top-card-v2-section",
-            "main.scaffold-layout__main section.artdeco-card",
-            ""
-        ]
+        # --- Robust Connect button detection (Scenario 1, 2, and 3) ---
+        connect_clicked, scenario, error_reason = await _find_and_click_connect_button(page)
 
-        connect_clicked = await _find_and_click_connect_button(page, containers)
-
-        # Strategy G: Handle "Pending" connection status - if already connected, skip
+        # Strategy G: Handle "Pending" connection status - request already sent
         if not connect_clicked:
             try:
                 pending_selectors = [
@@ -1417,20 +1467,51 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             except Exception:
                 pass
 
-        # Strategy H: If there's a Message button instead of Connect, they may already be connected
+        # Strategy H: Explicit "already connected" check (1st degree or "Connected" button)
         if not connect_clicked:
             try:
-                msg_btn = page.locator("button:has-text('Message'), a:has-text('Message')").first
-                if await msg_btn.is_visible(timeout=500):
-                    logger.info("Message button found - user likely already connected")
+                page_text = await page.inner_text("body")
+                # Look for definitive connected signals
+                connected_button = await page.query_selector(
+                    "button:has-text('Connected'), span:has-text('· 1st ·'), span:has-text('· 1st·')"
+                )
+                is_first_degree = "· 1st ·" in page_text or "·1st·" in page_text or "\u00b7 1st \u00b7" in page_text
+                if connected_button or is_first_degree:
+                    logger.info("Profile confirmed as already connected (1st degree / Connected button).")
                     return {
                         "success": True,
-                        "action": "connection_sent",
+                        "action": "already_connected",
                         "linkedin_url": linkedin_url,
                         "note_sent": False,
                         "note_content": "",
-                        "message": "User may already be connected (Message button visible)"
+                        "message": "Already connected with this person"
                     }
+            except Exception:
+                pass
+
+        # Strategy I: Try to Follow (if Connect is not available)
+        if not connect_clicked:
+            try:
+                follow_selectors = [
+                    "button:has-text('Follow')",
+                    "button[aria-label*='Follow']",
+                    "span:has-text('Follow')",
+                ]
+                for sel in follow_selectors:
+                    try:
+                        loc = page.locator(sel).first
+                        if await loc.is_visible(timeout=2000):
+                            await loc.click(timeout=5000)
+                            return {
+                                "success": True,
+                                "action": "followed",
+                                "linkedin_url": linkedin_url,
+                                "note_sent": False,
+                                "note_content": "",
+                                "message": "Followed the profile (no Connect button available)"
+                            }
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -1442,19 +1523,67 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
                 pass
             return {
                 "success": False,
-                "error": "Connect button not found. User may already be connected or button selector mismatch.",
+                "error": error_reason or "Connect button not found. User may already be connected or button selector mismatch.",
+                "reason": "unavailable" if error_reason and ("Connect option not found in More dropdown" in error_reason or "More button not found" in error_reason) else "failed",
                 "error_screenshot_path": scr_path
             }
 
-        await _random_delay(1, 3)
+        await _random_delay(1.5, 2.5)
 
-        # Check for LinkedIn Premium upsell / out of free notes modal
+        # Check for LinkedIn modals / dialogs (e.g. 'How do you know this person?', 'Premium upsell')
         out_of_notes = False
         send_clicked = False
         try:
-            modal_loc = page.locator("div.artdeco-modal").first
-            if await modal_loc.is_visible(timeout=2000):
+            modal_loc = page.locator("div.artdeco-modal, div[role='dialog']").first
+            if await modal_loc.is_visible(timeout=3000):
+                await _take_playwright_screenshot(page, "modal_visible")
                 modal_text = await modal_loc.inner_text()
+                logger.info("LinkedIn modal text detected: %s", modal_text[:200])
+
+                # 1. Handle 'How do you know' modal
+                if "How do you know" in modal_text or "know each other" in modal_text or "Select a connection type" in modal_text:
+                    logger.info("Handling 'How do you know this person' modal...")
+                    other_selectors = [
+                        "button:has-text('Other')",
+                        "span:has-text('Other')",
+                        "label:has-text('Other')",
+                        "input[value='other']",
+                    ]
+                    clicked_option = False
+                    for opt_sel in other_selectors:
+                        try:
+                            opt_loc = modal_loc.locator(opt_sel).first
+                            if await opt_loc.is_visible(timeout=1000):
+                                await opt_loc.click()
+                                clicked_option = True
+                                logger.info("Selected 'Other' option using: %s", opt_sel)
+                                break
+                        except Exception:
+                            pass
+                    
+                    next_selectors = [
+                        "button:has-text('Connect')",
+                        "button:has-text('Next')",
+                        "button.artdeco-button--primary",
+                    ]
+                    for next_sel in next_selectors:
+                        try:
+                            next_loc = modal_loc.locator(next_sel).first
+                            if await next_loc.is_visible(timeout=1000):
+                                await next_loc.click()
+                                logger.info("Clicked Next/Connect button on 'How do you know' modal: %s", next_sel)
+                                await _random_delay(2.0, 3.0)  # Wait for note modal to load
+                                await _take_playwright_screenshot(page, "after_how_do_you_know_modal")
+                                break
+                        except Exception:
+                            pass
+                    
+                    # Refresh modal ref after transition
+                    modal_loc = page.locator("div.artdeco-modal, div[role='dialog']").first
+                    if await modal_loc.is_visible(timeout=1000):
+                        modal_text = await modal_loc.inner_text()
+
+                # 2. Check for Premium upsell modal
                 if "out of free custom notes" in modal_text or "personalized invites with Premium" in modal_text or "invites with Premium" in modal_text or "reached the limit" in modal_text:
                     logger.warning("LinkedIn Premium upsell modal detected before adding note. Attempting to send without a note directly...")
                     out_of_notes = True
@@ -1492,7 +1621,7 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
                         except Exception:
                             pass
         except Exception as e:
-            logger.debug("Error checking for Premium modal: %s", e)
+            logger.debug("Error checking modal dialogs: %s", e)
 
         # Scoped selectors for the send invitation modal/dialog
         add_note_selectors = [
@@ -1529,13 +1658,22 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             "button:has-text('Send invitation')",
             "button[aria-label*='Send']",
             "button[aria-label*='send']",
+            "button[aria-label*='Send invitation']",
+            "button[aria-label*='invitation']",
             "div.artdeco-modal button:has-text('Send')",
             "div.artdeco-modal button:has-text('Send now')",
             "div[role='dialog'] button:has-text('Send')",
             "div[role='dialog'] button:has-text('Send now')",
             "button[aria-label='Send']",
             "button[aria-label='Send now']",
-            "button[aria-label='Send invitation']"
+            "button[aria-label='Send invitation']",
+            "button[data-test-id='send-invite-button']",
+            "button[data-control-name='send_invitation']",
+            "button[data-control-name='invitation']",
+            "button.artdeco-button--primary",
+            "button[type='submit']",
+            "button:has-text('Done')",
+            "div.artdeco-modal button:has-text('Done')",
         ]
 
         if note and not out_of_notes:
@@ -1544,12 +1682,12 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             for selector in add_note_selectors:
                 loc = page.locator(selector).first
                 try:
-                    await loc.wait_for(state="visible", timeout=5000)
-                    await _random_delay(0.5, 1.0)
-                    await loc.click(timeout=5000)
+                    await loc.wait_for(state="visible", timeout=3000)
+                    await _random_delay(0.3, 0.7)
+                    await loc.click(timeout=3000)
                     add_note_clicked = True
                     logger.info("Clicked Add a note button using: %s", selector)
-                    await _random_delay(1.5, 3.0)  # Wait for note textarea to appear
+                    await _random_delay(1.0, 2.0)  # Wait for note textarea to appear
                     break
                 except Exception:
                     continue
@@ -1558,7 +1696,7 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
                 logger.warning("Failed to locate and click 'Add a note' button inside the connection dialog. Setting out_of_notes = True to send without a note.")
                 out_of_notes = True
 
-            await _random_delay(1, 2)
+            await _random_delay(0.5, 1.0)
 
             # Check if Premium upsell modal appeared instead of note input textarea
             try:
@@ -1637,12 +1775,12 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             for selector in send_selectors:
                 loc = page.locator(selector).first
                 try:
-                    await loc.wait_for(state="visible", timeout=8000)
+                    await loc.wait_for(state="visible", timeout=5000)
                     await _random_delay(0.3, 0.7)
-                    await loc.click(timeout=8000)
+                    await loc.click(timeout=5000)
                     send_clicked = True
                     logger.info("Clicked Send connection button using: %s", selector)
-                    await _random_delay(2, 4)  # Wait for send to complete
+                    await _random_delay(1.5, 2.5)  # Wait for send to complete
                     break
                 except Exception:
                     continue
@@ -1673,7 +1811,7 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
                     logger.warning("Page reload timed out or failed: %s", e)
                 
                 # Click Connect again using robust helper
-                connect_clicked = await _find_and_click_connect_button(page, containers)
+                connect_clicked, _, _ = await _find_and_click_connect_button(page)
                 
                 if connect_clicked:
                     await _random_delay(2, 3)
@@ -1722,16 +1860,17 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
         err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
         return {"success": False, "error": err_msg, "error_screenshot_path": scr_path}
     finally:
-        try:
-            if browser:
-                await browser.close()
-        except Exception:
-            pass
-        try:
-            if pw:
-                await pw.stop()
-        except Exception:
-            pass
+        if pw:
+            try:
+                if browser:
+                    await browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    await pw.stop()
+            except Exception:
+                pass
 
 
 async def send_connection_request(linkedin_url: str, note: str, user_id: str) -> Dict[str, Any]:
@@ -1758,17 +1897,17 @@ async def send_connection_request(linkedin_url: str, note: str, user_id: str) ->
 # ── Messaging ──────────────────────────────────────────────────────────────
 
 
-@proactor_isolated
-async def _send_message_pw(linkedin_url: str, message: str, cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Send message using Playwright in an isolated thread loop."""
+async def _send_message_pw(linkedin_url: str, message: str, cookies: List[Dict[str, Any]], page=None) -> Dict[str, Any]:
+    """Send message using Playwright."""
     pw = None
     browser = None
     try:
-        async_playwright = await _get_playwright()
-        pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
-        context = await _create_stealth_context(browser, cookies=cookies)
-        page = await context.new_page()
+        if page is None:
+            async_playwright = await _get_playwright()
+            pw = await async_playwright().start()
+            browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
+            context = await _create_stealth_context(browser, cookies=cookies)
+            page = await context.new_page()
         await _random_delay(2, 4)
         try:
             await page.goto(linkedin_url, wait_until="domcontentloaded", timeout=45000)
@@ -2005,16 +2144,17 @@ async def _send_message_pw(linkedin_url: str, message: str, cookies: List[Dict[s
         err_msg = str(exc) if str(exc) else f"{type(exc).__name__}"
         return {"success": False, "error": err_msg, "error_screenshot_path": scr_path}
     finally:
-        try:
-            if browser:
-                await browser.close()
-        except Exception:
-            pass
-        try:
-            if pw:
-                await pw.stop()
-        except Exception:
-            pass
+        if pw:
+            try:
+                if browser:
+                    await browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    await pw.stop()
+            except Exception:
+                pass
 
 
 async def send_message(linkedin_url: str, message: str, user_id: str) -> Dict[str, Any]:
@@ -2041,23 +2181,25 @@ async def send_message(linkedin_url: str, message: str, user_id: str) -> Dict[st
 # ── Connection Monitoring ──────────────────────────────────────────────────
 
 
-@proactor_isolated
-async def _get_pending_invitations_pw(cookies: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Check for notifications and messages inside isolated thread loop."""
+async def _get_pending_invitations_pw(cookies: List[Dict[str, Any]], page=None) -> Dict[str, Any]:
+    """Check for notifications and messages."""
     pw = None
     browser = None
     try:
-        async_playwright = await _get_playwright()
-        pw = await async_playwright().start()
-        browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
-        context = await _create_stealth_context(browser, cookies=cookies)
-        page = await context.new_page()
+        if page is None:
+            async_playwright = await _get_playwright()
+            pw = await async_playwright().start()
+            browser = await _launch_stealth_browser(pw, headless=LINKEDIN_HEADLESS)
+            context = await _create_stealth_context(browser, cookies=cookies)
+            page = await context.new_page()
         await _random_delay(2, 4)
 
         # Check notifications for accepted connections
         accepted_connections = []
         try:
             await page.goto("https://www.linkedin.com/mynetwork/invite-connect/connections/", wait_until="domcontentloaded", timeout=30000)
+            if "login" in page.url or "signin" in page.url or "uas/" in page.url or "signup" in page.url:
+                raise ValueError("Session expired (redirected to login page)")
             await _random_delay(3, 5)
             
             # Scrape connection links
@@ -2099,12 +2241,16 @@ async def _get_pending_invitations_pw(cookies: List[Dict[str, Any]]) -> Dict[str
                        len(accepted_connections), name_fail_count)
                 
         except Exception as e:
+            if "Session expired" in str(e):
+                raise
             logger.warning("Failed to scrape accepted connections: %s", e)
 
         # Check sent invitations page
         pending_invitations = []
         try:
             await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/sent/", wait_until="domcontentloaded", timeout=30000)
+            if "login" in page.url or "signin" in page.url or "uas/" in page.url or "signup" in page.url:
+                raise ValueError("Session expired (redirected to login page)")
             await _random_delay(3, 5)
             
             # Scrape sent cards
@@ -2118,13 +2264,17 @@ async def _get_pending_invitations_pw(cookies: List[Dict[str, Any]]) -> Dict[str
                     if clean_url not in pending_invitations:
                         pending_invitations.append(clean_url)
         except Exception as e:
+            if "Session expired" in str(e):
+                raise
             logger.warning("Failed to scrape pending sent invitations: %s", e)
 
-# Check messaging for new messages and ALL conversations (to get names for connections)
+        # Check messaging for new messages and ALL conversations (to get names for connections)
         new_messages = []
         all_conversations_names = {}  # profile_url -> name mapping
         try:
             await page.goto("https://www.linkedin.com/messaging/", wait_until="domcontentloaded", timeout=15000)
+            if "login" in page.url or "signin" in page.url or "uas/" in page.url or "signup" in page.url:
+                raise ValueError("Session expired (redirected to login page)")
             await _random_delay(2, 4)
             
             # Collect ALL conversations to build name map (not just unread)
@@ -2173,6 +2323,8 @@ async def _get_pending_invitations_pw(cookies: List[Dict[str, Any]]) -> Dict[str
                     "thread_url": href,
                 })
         except Exception as e:
+            if "Session expired" in str(e):
+                raise
             logger.warning("Failed to scrape new messages: %s", e)
         
         # Enrich connection names from conversations name map
@@ -2188,6 +2340,8 @@ async def _get_pending_invitations_pw(cookies: List[Dict[str, Any]]) -> Dict[str
 
     except Exception as exc:
         logger.error("Failed to check invitations via Playwright: %s", exc)
+        if "Session expired" in str(exc):
+            return {"success": False, "error": "Session expired (redirected to login page)"}
         return {"accepted_connections": [], "pending_invitations": [], "new_messages": []}
     finally:
         try:
@@ -2576,16 +2730,66 @@ def _encrypt_cookies(cookies_json: str) -> str:
 
 
 def _decrypt_cookies(encrypted: str) -> str:
-    """Decrypt stored cookie data."""
+    """
+    Decrypt stored cookie data.
+
+    Tries multiple strategies in order:
+      1. Current Fernet key (sha256 of COOKIE_ENCRYPTION_KEY or JWT_SECRET)
+      2. JWT_SECRET used directly as Fernet key (legacy fallback)
+      3. Base64 decode (old plain storage before encryption was added)
+      4. Raw JSON passthrough (dev/test mode)
+
+    If all strategies fail, raises ValueError with a clear user-facing message
+    so callers can mark the session as expired rather than crash-looping.
+    """
+    import base64
+    import json
+
+    errors = []
+
+    # Strategy 1: Current derived key
     try:
         from cryptography.fernet import Fernet
         f = Fernet(_get_encryption_key())
         return f.decrypt(encrypted.encode()).decode()
     except Exception as exc:
-        logger.warning("Failed to decrypt cookies using Fernet, trying base64 fallback: %s", exc)
-        import base64
-        try:
-            return base64.b64decode(encrypted.encode()).decode()
-        except Exception:
-            raise exc
+        errors.append(f"derived_key: {exc}")
+
+    # Strategy 2: JWT_SECRET sha256 directly (if COOKIE_ENCRYPTION_KEY was added after cookies were saved)
+    try:
+        from cryptography.fernet import Fernet
+        from app.config.settings import settings
+        import hashlib
+        fallback_key = base64.urlsafe_b64encode(hashlib.sha256(settings.JWT_SECRET.encode()).digest())
+        f = Fernet(fallback_key)
+        return f.decrypt(encrypted.encode()).decode()
+    except Exception as exc:
+        errors.append(f"jwt_secret_key: {exc}")
+
+    # Strategy 3: Plain base64 (old storage before encryption was added)
+    try:
+        decoded = base64.b64decode(encrypted.encode()).decode("utf-8")
+        json.loads(decoded)  # Verify it is valid JSON cookies
+        return decoded
+    except Exception as exc:
+        errors.append(f"base64: {exc}")
+
+    # Strategy 4: Already plain JSON (dev mode)
+    try:
+        json.loads(encrypted)
+        return encrypted
+    except Exception as exc:
+        errors.append(f"raw_json: {exc}")
+
+    # All strategies failed — session key has rotated or data is corrupted
+    logger.error(
+        "LinkedIn cookie decryption failed with all strategies. "
+        "Session was encrypted with a different key. "
+        "User must re-connect their LinkedIn session. Errors: %s",
+        " | ".join(errors),
+    )
+    raise ValueError(
+        "LinkedIn session cookies could not be decrypted — the encryption key has changed. "
+        "Please re-connect your LinkedIn account via Settings → Integrations."
+    )
 

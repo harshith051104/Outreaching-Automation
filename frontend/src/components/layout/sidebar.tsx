@@ -29,6 +29,7 @@ import {
   Moon,
   MailCheck,
   Zap,
+  ClipboardList,
 } from "lucide-react";
 import { getMonitorStats } from "@/services/monitor-api";
 import { getUnreadNotificationsCount } from "@/services/task-api";
@@ -111,7 +112,7 @@ export default function Sidebar() {
         { href: "/dashboard/leads-discovery", label: "Lead Discovery", icon: Search },
         { href: "/dashboard/leads", label: "Leads", icon: Users },
         { href: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone },
-        { href: "/dashboard/flow-builder", label: "Flow Builder", icon: Zap },
+        { href: "/dashboard/outreach-tracker", label: "Outreach Tracker", icon: ClipboardList },
         { href: "/dashboard/signals", label: "Signals", icon: Brain, badge: "New" },
         { href: "/dashboard/opportunities", label: "Opportunities", icon: Lightbulb },
       ]

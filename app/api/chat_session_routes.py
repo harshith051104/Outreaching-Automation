@@ -4,6 +4,7 @@ Chat session API routes.
 Manages Elly chat sessions with history persistence.
 """
 
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel
 
@@ -15,6 +16,7 @@ from app.services.chat_session_service import (
     delete_session,
     get_session_messages,
     add_message,
+    update_session_llm,
 )
 from app.services.chatbot_service import handle_chatbot_chat
 
@@ -28,6 +30,8 @@ class SessionCreateRequest(BaseModel):
 class SessionChatRequest(BaseModel):
     message: str
     uploaded_files: list[dict] = []
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
 
 
 @router.post("/sessions", summary="Create chat session")
@@ -113,6 +117,16 @@ async def chat_in_session(
             detail="Session not found",
         )
 
+    # Resolve LLM provider and model, updating session if user specified new ones
+    provider = data.llm_provider
+    model = data.llm_model
+    
+    if provider and model:
+        await update_session_llm(session_id, current_user["id"], provider, model)
+    else:
+        provider = provider or session.get("llm_provider")
+        model = model or session.get("llm_model")
+
     uploaded_files = list(data.uploaded_files) if data.uploaded_files else []
     
     if not uploaded_files:
@@ -141,6 +155,8 @@ async def chat_in_session(
         conversation_history=conversation_history,
         uploaded_files=uploaded_files,
         background_tasks=background_tasks,
+        llm_provider=provider,
+        llm_model=model,
     )
 
     await add_message(
@@ -148,6 +164,7 @@ async def chat_in_session(
         "assistant",
         result.get("response", ""),
         actions_taken=result.get("actions_taken"),
+        pending_approval=result.get("pending_approval"),
     )
 
     return result

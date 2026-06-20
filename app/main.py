@@ -64,6 +64,67 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to run lead ID migration: {exc}")
 
+    # Run database migration: fix campaign_ids that were saved as names instead of UUIDs
+    try:
+        import re
+        from app.config.mongodb_config import get_database
+        db = await get_database()
+        campaigns = await db.campaigns.find({"status": {"$ne": "deleted"}}).to_list(length=1000)
+        migrated_leads_count = 0
+        for campaign in campaigns:
+            camp_name = campaign.get("name")
+            camp_id = campaign.get("id")
+            if camp_name and camp_id:
+                leads_to_fix = db.leads.find({
+                    "campaign_id": {"$regex": f"^{re.escape(camp_name)}$", "$options": "i"}
+                })
+                async for lead_doc in leads_to_fix:
+                    await db.leads.update_one(
+                        {"_id": lead_doc["_id"]},
+                        {"$set": {"campaign_id": camp_id, "updated_at": datetime.now(timezone.utc)}}
+                    )
+                    migrated_leads_count += 1
+                
+                # Update total_leads count for the campaign
+                total_leads = await db.leads.count_documents({"campaign_id": camp_id})
+                await db.campaigns.update_one(
+                    {"id": camp_id},
+                    {"$set": {"total_leads": total_leads}}
+                )
+        if migrated_leads_count > 0:
+            logger.info("Database Migration: Fixed campaign_id for %d leads.", migrated_leads_count)
+    except Exception as exc:
+        logger.error(f"Failed to run campaign ID lead migration: {exc}")
+
+    # Run database migration: expedite pending email tasks for active/draft Market Stakeholder campaigns
+    try:
+        from app.config.mongodb_config import get_database
+        from datetime import datetime, timedelta, timezone
+        db = await get_database()
+        campaigns_to_fix = await db.campaigns.find({
+            "name": {"$in": ["Market Stakeholder", "Business Stakeholder"]},
+            "status": {"$ne": "deleted"}
+        }).to_list(length=100)
+        camp_ids = [c["id"] for c in campaigns_to_fix if c.get("id")]
+        if camp_ids:
+            result = await db.scheduled_tasks.update_many(
+                {
+                    "campaign_id": {"$in": camp_ids},
+                    "status": "pending",
+                    "channel": "email"
+                },
+                {
+                    "$set": {
+                        "scheduled_at": datetime.now(timezone.utc) - timedelta(hours=1),
+                        "updated_at": datetime.now(timezone.utc)
+                    }
+                }
+            )
+            if result.modified_count > 0:
+                logger.info("Database Migration: Expedited %d pending email tasks to run immediately.", result.modified_count)
+    except Exception as exc:
+        logger.error(f"Failed to run scheduled tasks expedition migration: {exc}")
+
     try:
         from app.services.qdrant_service import ensure_all_collections
         ensure_all_collections()
@@ -99,17 +160,38 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Failed to initialize LLM toggle state from database: %s", exc)
 
+    # Pre-warm active LinkedIn sessions in background
+    try:
+        from app.services.linkedin_session_manager import restore_sessions_on_startup
+        asyncio.create_task(restore_sessions_on_startup())
+    except Exception as exc:
+        logger.error(f"Failed to start pre-warming LinkedIn sessions: {exc}")
+
     logger.info("Application started at %s", datetime.now(timezone.utc).isoformat())
 
     campaign_processor_task = asyncio.create_task(_campaign_processor_loop())
+    sheets_sync_task = asyncio.create_task(_sheets_sync_loop())
 
     yield
 
     campaign_processor_task.cancel()
+    sheets_sync_task.cancel()
     try:
         await campaign_processor_task
     except asyncio.CancelledError:
         pass
+    try:
+        await sheets_sync_task
+    except asyncio.CancelledError:
+        pass
+
+    # Clean up warm sessions on shutdown
+    try:
+        from app.services.linkedin_session_manager import close_all_active_sessions
+        await close_all_active_sessions()
+    except Exception as exc:
+        logger.error(f"Error during shutdown of LinkedIn sessions: {exc}")
+
     await mongodb_client.disconnect()
     logger.info("Application shutdown complete.")
 
@@ -149,26 +231,33 @@ async def _campaign_processor_loop():
                     logger.info("Scheduler: Scheduling sequences for %d new leads in campaign '%s'",
                                len(pending_leads), campaign.get("name"))
 
-                    steps = campaign.get("sequence_steps") or [
-                        {"step_number": 1, "channel": "linkedin", "delay_days": 0,
-                         "body_template": "Hi {{first_name}}, I'd like to connect."},
-                        {"step_number": 2, "channel": "email", "delay_days": 3,
-                         "subject_template": campaign.get("subject_template") or "Quick question",
-                         "body_template": campaign.get("body_template") or "Hi {{first_name}},"},
-                        {"step_number": 3, "channel": "linkedin", "delay_days": 6,
-                         "body_template": "Hi {{first_name}}, I sent you a message earlier. Would love to connect."},
-                        {"step_number": 4, "channel": "email", "delay_days": 10,
-                         "subject_template": "Re: " + (campaign.get("subject_template") or "Quick question"),
-                         "body_template": "Hi {{first_name}},\n\nJust following up on my previous message. Any thoughts?"},
-                        {"step_number": 5, "channel": "linkedin", "delay_days": 15,
-                         "body_template": "Hi {{first_name}}, great post! Just engaged with it."},
-                        {"step_number": 6, "channel": "email", "delay_days": 20,
-                         "subject_template": "{{company}} + {{sender_name}}",
-                         "body_template": "Hi {{first_name}},\n\nI noticed {{company}} has been growing rapidly. We've helped similar companies achieve great results.\n\nWould love to share how we could help.\n\nBest"},
-                        {"step_number": 7, "channel": "email", "delay_days": 28,
-                         "subject_template": "One last try",
-                         "body_template": "Hi {{first_name}},\n\nI hope this finds you well. I'll respect your time and won't reach out again after this.\n\nBest"}
-                    ]
+                    if campaign.get("subject_template") or campaign.get("body_template"):
+                        steps = campaign.get("sequence_steps") or [
+                            {"step_number": 1, "channel": "email", "delay_days": 0,
+                             "subject_template": campaign.get("subject_template") or "Quick question",
+                             "body_template": campaign.get("body_template") or "Hi {{first_name}},"}
+                        ]
+                    else:
+                        steps = campaign.get("sequence_steps") or [
+                            {"step_number": 1, "channel": "linkedin", "delay_days": 0,
+                             "body_template": "Hi {{first_name}}, I'd like to connect."},
+                            {"step_number": 2, "channel": "email", "delay_days": 3,
+                             "subject_template": campaign.get("subject_template") or "Quick question",
+                             "body_template": campaign.get("body_template") or "Hi {{first_name}},"},
+                            {"step_number": 3, "channel": "linkedin", "delay_days": 6,
+                             "body_template": "Hi {{first_name}}, I sent you a message earlier. Would love to connect."},
+                            {"step_number": 4, "channel": "email", "delay_days": 10,
+                             "subject_template": "Re: " + (campaign.get("subject_template") or "Quick question"),
+                             "body_template": "Hi {{first_name}},\n\nJust following up on my previous message. Any thoughts?"},
+                            {"step_number": 5, "channel": "linkedin", "delay_days": 15,
+                             "body_template": "Hi {{first_name}}, great post! Just engaged with it."},
+                            {"step_number": 6, "channel": "email", "delay_days": 20,
+                             "subject_template": "{{company}} + {{sender_name}}",
+                             "body_template": "Hi {{first_name}},\n\nI noticed {{company}} has been growing rapidly. We've helped similar companies achieve great results.\n\nWould love to share how we could help.\n\nBest"},
+                            {"step_number": 7, "channel": "email", "delay_days": 28,
+                             "subject_template": "One last try",
+                             "body_template": "Hi {{first_name}},\n\nI hope this finds you well. I'll respect your time and won't reach out again after this.\n\nBest"}
+                        ]
 
                     for lead in pending_leads:
                         lead_id = lead.get("id") or str(lead["_id"])
@@ -189,21 +278,7 @@ async def _campaign_processor_loop():
             # Process scheduled followup tasks
             await process_pending_followups()
 
-            # Process visual flow delay triggers
-            try:
-                from app.services.flow_execution_service import FlowExecutionService
-                await FlowExecutionService.resume_delay_runs()
-            except Exception as fe_exc:
-                logger.error("Flow execution delay runner failed: %s", fe_exc)
 
-            # Process active campaign flows and trigger them for new leads automatically in background
-            try:
-                from app.services.flow_execution_service import FlowExecutionService
-                active_flows = await db.campaign_flows.find({"status": "active"}).to_list(length=50)
-                for flow in active_flows:
-                    await FlowExecutionService.start_flow(flow["id"], flow["user_id"], is_manual=False)
-            except Exception as flow_sched_exc:
-                logger.error("Background flow execution trigger runner failed: %s", flow_sched_exc)
 
             # Poll Gmail for replies
             logger.info("Scheduler: Polling Gmail for campaign replies...")
@@ -237,6 +312,23 @@ async def _campaign_processor_loop():
             logger.exception("Campaign processor loop error: %s", exc)
 
         await asyncio.sleep(30)
+
+
+async def _sheets_sync_loop():
+    """
+    Background loop that pulls Google Sheet updates into MongoDB every 15 minutes.
+    Skipped silently if no users have configured Google Sheets integration.
+    """
+    import asyncio
+    await asyncio.sleep(60)  # Initial delay to let the app stabilize
+
+    while True:
+        try:
+            from app.services.sheets_sync_service import sync_all_users
+            await sync_all_users()
+        except Exception as exc:
+            logger.error("Sheets sync loop error: %s", exc)
+        await asyncio.sleep(900)  # 15 minutes
 
 
 def create_app() -> FastAPI:
@@ -316,6 +408,25 @@ def create_app() -> FastAPI:
             "architecture": "metadata-driven",
         }
 
+    @app.get("/health/linkedin_diagnose")
+    async def linkedin_diagnose():
+        from app.config.mongodb_config import get_database
+        db = await get_database()
+        sessions = await db.linkedin_sessions.find({}).to_list(length=10)
+        return {
+            "sessions": [
+                {
+                    "user_id": s.get("user_id"),
+                    "status": s.get("status"),
+                    "account_name": s.get("account_name"),
+                    "last_validated_at": s.get("last_validated_at"),
+                    "updated_at": s.get("updated_at"),
+                    "has_cookies": bool(s.get("cookies_encrypted"))
+                }
+                for s in sessions
+            ]
+        }
+
     from app.api.auth_routes import router as auth_router
     from app.api.gmail_routes import router as gmail_router
     from app.api.campaign_routes import router as campaign_router
@@ -341,7 +452,11 @@ def create_app() -> FastAPI:
     from app.api.suggestion_routes import router as suggestion_router
     from app.api.notification_routes import router as notification_router
     from app.api.task_tracker_dashboard import router as task_tracker_dashboard_router
-    from app.api.flow_routes import router as flow_router
+
+    # ── New platform upgrade routers ──────────────────────────────────────
+    from app.api.integrations_routes import router as integrations_router
+    from app.api.outreach_tracker_routes import router as outreach_tracker_router
+    from app.api.chatbot_approval_routes import router as chatbot_approval_router
 
     api_prefix = settings.API_PREFIX
 
@@ -370,7 +485,11 @@ def create_app() -> FastAPI:
     app.include_router(suggestion_router, prefix=api_prefix)
     app.include_router(notification_router, prefix=api_prefix)
     app.include_router(task_tracker_dashboard_router, prefix=api_prefix)
-    app.include_router(flow_router, prefix=api_prefix, tags=["Flow Builder"])
+
+    # ── New platform upgrade routers ──────────────────────────────────────
+    app.include_router(integrations_router, prefix=api_prefix, tags=["Integrations"])
+    app.include_router(outreach_tracker_router, prefix=api_prefix, tags=["Outreach Tracker"])
+    app.include_router(chatbot_approval_router, prefix=api_prefix, tags=["Chatbot Approvals"])
 
     return app
 

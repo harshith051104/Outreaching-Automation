@@ -10,6 +10,7 @@ import {
   ChatSession,
 } from "@/services/monitor-api";
 import api from "@/services/api";
+import ApprovalCard, { type ApprovalAction } from "@/components/chat/ApprovalCard";
 
 const renderFormattedMessage = (content: string) => {
   const lines = content.split("\n");
@@ -180,18 +181,53 @@ const renderFormattedMessage = (content: string) => {
   return elements;
 };
 
+interface ChatMessage {
+  role: string;
+  content: string;
+  pendingApproval?: ApprovalAction | null;
+}
+
 export default function ChatbotPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [actions, setActions] = useState<any[]>([]);
   const [showSidebar, setShowSidebar] = useState(true);
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string; url: string; type: string; id: string }[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalAction[]>([]);
+
+  const [llmProvider, setLlmProvider] = useState<string>("nvidia");
+  const [llmModel, setLlmModel] = useState<string>("qwen/qwen3.5-122b-a10b");
+  const [modelsData, setModelsData] = useState<any>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const fetchPendingApprovals = async () => {
+    try {
+      const response = await api.get("/chatbot/approvals");
+      if (response.status === 200) {
+        setPendingApprovals(response.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch pending approvals:", err);
+    }
+  };
+
+  const handleApprovalDecision = (actionId: string, decision: "approve" | "reject") => {
+    // Remove from the polled list
+    setPendingApprovals((prev) => prev.filter((app) => app.action_id !== actionId));
+    // Also remove from any inline messages to avoid duplication
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.pendingApproval?.action_id === actionId
+          ? { ...m, pendingApproval: null }
+          : m
+      )
+    );
+  };
 
   // Auto-grow textarea height on input change
   useEffect(() => {
@@ -202,17 +238,44 @@ export default function ChatbotPage() {
     }
   }, [input]);
 
-  // Load sessions on mount
+  // Load sessions, LLM models and setup polling for approvals on mount
   useEffect(() => {
     loadSessions();
+    fetchPendingApprovals();
+    
+    const fetchModels = async () => {
+      try {
+        const response = await api.get("/chatbot/models");
+        if (response.status === 200) {
+          setModelsData(response.data.providers);
+          setLlmProvider(response.data.default_provider);
+          setLlmModel(response.data.default_model);
+        }
+      } catch (err) {
+        console.error("Failed to load LLM models:", err);
+      }
+    };
+    fetchModels();
+
+    const interval = setInterval(fetchPendingApprovals, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Load messages when session changes
+  // Load messages and sticky model/provider settings when session changes
   useEffect(() => {
     if (activeSessionId) {
       loadSessionMessages(activeSessionId);
+      const currentSession = sessions.find((s) => s.id === activeSessionId);
+      if (currentSession) {
+        if (currentSession.llm_provider) {
+          setLlmProvider(currentSession.llm_provider);
+        }
+        if (currentSession.llm_model) {
+          setLlmModel(currentSession.llm_model);
+        }
+      }
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, sessions]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -232,9 +295,10 @@ export default function ChatbotPage() {
     try {
       const data = await getChatSessionMessages(sessionId);
       // Map to simple message format for display
-      const mappedMessages = data.map((m) => ({
+      const mappedMessages = data.map((m: any) => ({
         role: m.role,
         content: m.content,
+        pendingApproval: m.pending_approval ?? null,
       }));
       setMessages(mappedMessages);
       // Load actions from messages
@@ -352,7 +416,7 @@ export default function ChatbotPage() {
       }
     }
 
-    const newMessages = [
+    const newMessages: ChatMessage[] = [
       ...messages,
       { role: "user", content: userMessage },
     ];
@@ -362,11 +426,14 @@ export default function ChatbotPage() {
     setLoading(true);
 
     try {
-      const data = await sendChatMessage(sessionId, userMessage, filesToSend);
+      const data = await sendChatMessage(sessionId, userMessage, filesToSend, llmProvider, llmModel);
+
+      // Check for pending approval embedded in response
+      const pendingApproval: ApprovalAction | null = data.pending_approval ?? null;
 
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.response },
+        { role: "assistant", content: data.response, pendingApproval },
       ]);
 
       if (data.actions_taken && data.actions_taken.length > 0) {
@@ -592,6 +659,90 @@ export default function ChatbotPage() {
               </p>
             </div>
           </div>
+
+          {/* Model Selection Dropdown */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex flex-col">
+              <label className="text-[9px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--sidebar-text-muted)" }}>
+                Provider
+              </label>
+              <select
+                value={llmProvider}
+                onChange={(e) => {
+                  const newProvider = e.target.value;
+                  setLlmProvider(newProvider);
+                  if (modelsData && modelsData[newProvider]) {
+                    setLlmModel(modelsData[newProvider].default_model);
+                  }
+                }}
+                className="text-xs font-semibold px-2 py-1 rounded-lg border outline-none cursor-pointer transition-all shadow-sm"
+                style={{
+                  background: "var(--sidebar-toggle-bg)",
+                  borderColor: "var(--card-border)",
+                  color: "var(--foreground-color)"
+                }}
+              >
+                {modelsData ? (
+                  Object.entries(modelsData).map(([key, val]: [string, any]) => (
+                    <option key={key} value={key} className="bg-[var(--card-bg)] text-[var(--foreground-color)] font-semibold">
+                      {val.name}
+                    </option>
+                  ))
+                ) : (
+                  <>
+                    <option value="nvidia">Nvidia NIM</option>
+                    <option value="groq">Groq</option>
+                    <option value="xiaomi">Xiaomi</option>
+                  </>
+                )}
+              </select>
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-[9px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--sidebar-text-muted)" }}>
+                Model
+              </label>
+              <select
+                value={llmModel}
+                onChange={(e) => setLlmModel(e.target.value)}
+                className="text-xs font-semibold px-2 py-1 rounded-lg border outline-none cursor-pointer transition-all shadow-sm max-w-[170px] truncate"
+                style={{
+                  background: "var(--sidebar-toggle-bg)",
+                  borderColor: "var(--card-border)",
+                  color: "var(--foreground-color)"
+                }}
+              >
+                {modelsData && modelsData[llmProvider] ? (
+                  modelsData[llmProvider].models.map((m: any) => (
+                    <option key={m.id} value={m.id} title={m.name} className="bg-[var(--card-bg)] text-[var(--foreground-color)] font-semibold">
+                      {m.name}
+                    </option>
+                  ))
+                ) : (
+                  llmProvider === "nvidia" ? (
+                    <>
+                      <option value="qwen/qwen3.5-122b-a10b">Qwen 3.5 122B (NIM)</option>
+                      <option value="meta/llama-3.1-70b-instruct">Llama 3.1 70B (NIM)</option>
+                      <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B (NIM)</option>
+                      <option value="deepseek/deepseek-r1">DeepSeek R1 (NIM)</option>
+                    </>
+                  ) : llmProvider === "xiaomi" ? (
+                    <>
+                      <option value="mimo-v2.5">MiMo v2.5</option>
+                      <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+                      <option value="llama3-70b-8192">Llama 3 70B (8192)</option>
+                      <option value="llama3-8b-8192">Llama 3 8B (8192)</option>
+                      <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
+                    </>
+                  )
+                )}
+              </select>
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-1 overflow-hidden">
@@ -662,6 +813,12 @@ export default function ChatbotPage() {
                     {msg.role === "assistant" ? (
                       <div className="space-y-1">
                         {renderFormattedMessage(msg.content)}
+                        {msg.pendingApproval && (
+                          <ApprovalCard
+                            action={msg.pendingApproval}
+                            onDecision={handleApprovalDecision}
+                          />
+                        )}
                       </div>
                     ) : (
                       <div className="whitespace-pre-wrap font-medium">{msg.content}</div>
@@ -683,6 +840,36 @@ export default function ChatbotPage() {
               )}
               <div ref={messagesEndRef} />
             </div>
+
+            {/* Polled Pending Approvals Bar (not already shown inline) */}
+            {(() => {
+              const visibleActionIds = messages
+                .map((m) => m.pendingApproval?.action_id)
+                .filter(Boolean) as string[];
+              const filteredApprovals = pendingApprovals.filter(
+                (app) => !visibleActionIds.includes(app.action_id)
+              );
+
+              if (filteredApprovals.length === 0) return null;
+
+              return (
+                <div className="px-6 py-3 border-t border-[var(--card-border)] bg-yellow-500/5 dark:bg-yellow-400/5 space-y-3 max-h-[300px] overflow-y-auto">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[var(--foreground-color)] flex items-center gap-1.5">
+                      <span className="animate-pulse h-2 w-2 rounded-full bg-yellow-500"></span>
+                      Pending Approvals ({filteredApprovals.length})
+                    </span>
+                  </div>
+                  {filteredApprovals.map((app) => (
+                    <ApprovalCard
+                      key={app.action_id}
+                      action={app}
+                      onDecision={handleApprovalDecision}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
 
             {/* Input Form */}
             <form

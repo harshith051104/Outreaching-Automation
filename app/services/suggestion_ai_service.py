@@ -46,11 +46,10 @@ async def enhance_suggestion_with_ai(suggestion_id: str) -> None:
         }}
         """
 
-        from groq import Groq
-        from app.config.settings import settings
-
         def _call_groq(model: str) -> str:
-            client = Groq(api_key=settings.GROQ_API_KEY)
+            from app.config.groq_config import get_groq_client
+            user_id = suggestion.get("user_id") or suggestion.get("created_by")
+            client = get_groq_client(user_id)
             resp = client.chat.completions.create(
                 model=model,
                 messages=[

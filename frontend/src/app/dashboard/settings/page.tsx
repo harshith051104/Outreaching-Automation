@@ -3,12 +3,14 @@
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/auth-store";
 import { getGmailAccounts, getGmailAuthUrl, disconnectGmailAccount } from "@/services/gmail-api";
+import { getIntegrations, saveIntegration, deleteIntegration } from "@/services/integrations-api";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import IntegrationsCenter from "./integrations-center";
 import { 
   User, 
   Settings as SettingsIcon, 
@@ -69,15 +71,17 @@ export default function SettingsPage() {
   const [profileSuccess, setProfileSuccess] = useState("");
   const [profileError, setProfileError] = useState("");
 
-  // States for AI Models Tab
-  const [aiModels, setAiModels] = useState<AIModelsConfig>({
-    researchModel: "llama-3.3-70b-versatile",
-    emailModel: "llama-3.3-70b-versatile",
-    classifierModel: "llama-3.3-70b-versatile",
-    routerMode: "dynamic",
-    similarityThreshold: 0.7,
-    recencyWeight: 0.3,
+  // States for AI Models Tab (Now LLM keys management)
+  const [groqKey, setGroqKey] = useState("");
+  const [nvidiaKey, setNvidiaKey] = useState("");
+  const [xiaomiKey, setXiaomiKey] = useState("");
+  const [llmStatus, setLlmStatus] = useState<Record<string, { connected: boolean; error?: string }>>({
+    groq: { connected: false },
+    nvidia: { connected: false },
+    xiaomi: { connected: false },
   });
+  const [showLlmKeys, setShowLlmKeys] = useState<Record<string, boolean>>({});
+  const [llmSaveLoading, setLlmSaveLoading] = useState<Record<string, boolean>>({});
   const [aiModelsSuccess, setAiModelsSuccess] = useState("");
 
   // States for Integrations Tab
@@ -105,18 +109,31 @@ export default function SettingsPage() {
   const [preferencesSuccess, setPreferencesSuccess] = useState("");
 
   // Load Gmail accounts & LocalStorage Settings on Mount
+  const loadLlmStatus = async () => {
+    try {
+      const data = await getIntegrations();
+      const statusMap: Record<string, { connected: boolean; error?: string }> = {
+        groq: { connected: false },
+        nvidia: { connected: false },
+        xiaomi: { connected: false },
+      };
+      data.forEach(item => {
+        if (item.provider === "groq" || item.provider === "nvidia" || item.provider === "xiaomi") {
+          statusMap[item.provider] = {
+            connected: item.connected,
+            error: item.last_error || undefined,
+          };
+        }
+      });
+      setLlmStatus(statusMap);
+    } catch (err) {
+      console.error("Failed to load LLM integrations status:", err);
+    }
+  };
+
   useEffect(() => {
     loadGmail();
-
-    // Load AI models settings from localStorage
-    const savedAiModels = localStorage.getItem("outreach_settings_ai_models");
-    if (savedAiModels) {
-      try {
-        setAiModels((prev) => ({ ...prev, ...JSON.parse(savedAiModels) }));
-      } catch (err) {
-        console.error("Error loading saved AI models:", err);
-      }
-    }
+    loadLlmStatus();
 
     // Load API key overrides from localStorage
     const savedApiKeys = localStorage.getItem("outreach_settings_api_keys");
@@ -183,11 +200,37 @@ export default function SettingsPage() {
     setTimeout(() => setProfileSuccess(""), 3000);
   };
 
-  const handleAiModelsSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem("outreach_settings_ai_models", JSON.stringify(aiModels));
-    setAiModelsSuccess("AI model configurations updated successfully!");
-    setTimeout(() => setAiModelsSuccess(""), 3000);
+  const handleSaveLlmKey = async (provider: string, apiKey: string) => {
+    if (!apiKey.trim()) return;
+    setLlmSaveLoading(prev => ({ ...prev, [provider]: true }));
+    try {
+      await saveIntegration(provider, { api_key: apiKey.trim() });
+      setAiModelsSuccess(`${provider === "groq" ? "Groq" : provider === "nvidia" ? "Nvidia NIM" : "Xiaomi"} API key updated successfully!`);
+      // Clear key input
+      if (provider === "groq") setGroqKey("");
+      else if (provider === "nvidia") setNvidiaKey("");
+      else if (provider === "xiaomi") setXiaomiKey("");
+      
+      await loadLlmStatus();
+      setTimeout(() => setAiModelsSuccess(""), 3000);
+    } catch (err) {
+      console.error("Failed to save LLM key:", err);
+    } finally {
+      setLlmSaveLoading(prev => ({ ...prev, [provider]: false }));
+    }
+  };
+
+  const handleDeleteLlmKey = async (provider: string) => {
+    const label = provider === "groq" ? "Groq" : provider === "nvidia" ? "Nvidia NIM" : "Xiaomi";
+    if (!confirm(`Remove configured key for ${label}?`)) return;
+    try {
+      await deleteIntegration(provider);
+      setAiModelsSuccess(`${label} API key removed.`);
+      await loadLlmStatus();
+      setTimeout(() => setAiModelsSuccess(""), 3000);
+    } catch (err) {
+      console.error("Failed to delete LLM key:", err);
+    }
   };
 
   const handleApiKeysSave = (e: React.FormEvent) => {
@@ -437,497 +480,283 @@ export default function SettingsPage() {
 
         {/* 2. AI Models Tab Content */}
         <TabsContent value="ai-models">
-          <Card className="max-w-4xl">
-            <CardHeader>
-              <CardTitle>AI Agents and LLM Routing</CardTitle>
-              <CardDescription>
-                Assign models to specialized roles. All models run on Groq Server infrastructure.
+          <Card className="max-w-4xl border-[var(--card-border)] bg-[var(--card-bg)] shadow-2xl">
+            <CardHeader className="border-b border-[var(--card-border)] pb-6 mb-6">
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Cpu className="h-5 w-5 text-indigo-400" />
+                LLM Provider Configurations
+              </CardTitle>
+              <CardDescription className="text-slate-400">
+                Configure your API credentials for large language model providers. These keys are encrypted at rest and used securely server-side for chat agent execution.
               </CardDescription>
             </CardHeader>
-            <form onSubmit={handleAiModelsSave}>
-              <CardContent className="space-y-6">
-                {aiModelsSuccess && (
-                  <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-sm text-emerald-400">
-                    <Check className="h-4 w-4" />
-                    {aiModelsSuccess}
-                  </div>
-                )}
-
-                <div className="grid gap-6 sm:grid-cols-2">
-                  {/* Research Model Selector */}
-                  <div className="space-y-2">
-                    <Label htmlFor="research-model">Research Agent Model</Label>
-                    <p className="text-xs text-[var(--sidebar-text-muted)] mb-1">
-                      Powers background Tavily and Firecrawl deep research.
-                    </p>
-                    <select
-                      id="research-model"
-                      value={aiModels.researchModel}
-                      onChange={(e) => setAiModels({ ...aiModels, researchModel: e.target.value })}
-                      className={selectStyleClass}
-                    >
-                      <option value="llama-3.3-70b-versatile" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Llama 3.3 70B Versatile (Recommended)</option>
-                      <option value="llama-3.1-8b-instant" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Llama 3.1 8B Instant (Fast / Cost-optimized)</option>
-                      <option value="mixtral-8x7b-32768" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Mixtral 8x7B (High-Context Open Source)</option>
-                      <option value="deepseek-r1-distill-llama-70b" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>DeepSeek R1 Distill 70B (Complex Reasoning)</option>
-                    </select>
-                  </div>
-
-                  {/* Copywriting Model Selector */}
-                  <div className="space-y-2">
-                    <Label htmlFor="email-model">Copywriting & Sequencing Model</Label>
-                    <p className="text-xs text-[var(--sidebar-text-muted)] mb-1">
-                      Powers personalized email template drafts and RAG personalization hooks.
-                    </p>
-                    <select
-                      id="email-model"
-                      value={aiModels.emailModel}
-                      onChange={(e) => setAiModels({ ...aiModels, emailModel: e.target.value })}
-                      className={selectStyleClass}
-                    >
-                      <option value="llama-3.3-70b-versatile" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Llama 3.3 70B Versatile (Recommended)</option>
-                      <option value="llama-3.1-70b-specdec" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Llama 3.1 70B Speculative (High Speed)</option>
-                      <option value="mixtral-8x7b-32768" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Mixtral 8x7B (Natural Context Flow)</option>
-                    </select>
-                  </div>
-
-                  {/* Classifier Model Selector */}
-                  <div className="space-y-2">
-                    <Label htmlFor="classifier-model">Reply Intent Classification Model</Label>
-                    <p className="text-xs text-[var(--sidebar-text-muted)] mb-1">
-                      Analyzes incoming responses and assigns intent (referral, demo request, interested, OOO).
-                    </p>
-                    <select
-                      id="classifier-model"
-                      value={aiModels.classifierModel}
-                      onChange={(e) => setAiModels({ ...aiModels, classifierModel: e.target.value })}
-                      className={selectStyleClass}
-                    >
-                      <option value="llama-3.3-70b-versatile" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Llama 3.3 70B Versatile (Standard)</option>
-                      <option value="llama-3.1-8b-instant" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Llama 3.1 8B Instant (Ultra-fast / Accurate)</option>
-                    </select>
-                  </div>
-
-                  {/* Router Mode Selector */}
-                  <div className="space-y-2">
-                    <Label htmlFor="router-mode">Multi-LLM Router Mode</Label>
-                    <p className="text-xs text-[var(--sidebar-text-muted)] mb-1">
-                      Determine how API routing handles Groq token limits and speed fallbacks.
-                    </p>
-                    <select
-                      id="router-mode"
-                      value={aiModels.routerMode}
-                      onChange={(e) => setAiModels({ ...aiModels, routerMode: e.target.value })}
-                      className={selectStyleClass}
-                    >
-                      <option value="dynamic" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Dynamic Routing (Auto-recovery & Failovers)</option>
-                      <option value="cost" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Cost Optimized (Prioritizes 8B Models)</option>
-                      <option value="quality" style={{ background: 'var(--card-bg)', color: 'var(--foreground-color)' }}>Quality Optimized (Strictly 70B Models)</option>
-                    </select>
-                  </div>
+            <CardContent className="space-y-6">
+              {aiModelsSuccess && (
+                <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-sm text-emerald-400 animate-in fade-in">
+                  <Check className="h-4 w-4" />
+                  {aiModelsSuccess}
                 </div>
+              )}
 
-                <div className="border-t border-[var(--card-border)] pt-6 space-y-4">
-                  <h3 className="text-sm font-semibold text-[var(--foreground-color)] flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-[var(--primary)]" />
-                    Knowledge Retrieval & Embeddings RAG Configurations
-                  </h3>
-                  <p className="text-xs text-[var(--sidebar-text-muted)]">
-                    Fine-tune similarity queries against the local Qdrant Vector database collections (leads, signals, emails).
-                  </p>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-xs text-[var(--foreground-color)]/90">
-                        <span>Similarity Score Threshold</span>
-                        <span>{aiModels.similarityThreshold}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.1"
-                        max="0.9"
-                        step="0.05"
-                        value={aiModels.similarityThreshold}
-                        onChange={(e) => setAiModels({ ...aiModels, similarityThreshold: parseFloat(e.target.value) })}
-                        className="w-full h-1 bg-[var(--sidebar-toggle-bg)] rounded-lg appearance-none cursor-pointer accent-[var(--primary)]"
-                      />
-                      <p className="text-[10px] text-[var(--sidebar-text-muted)]">
-                        Minimum cosine similarity match required to pull memories. Higher values prevent irrelevant context.
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-xs text-[var(--foreground-color)]/90">
-                        <span>Recency decay boost weight</span>
-                        <span>{aiModels.recencyWeight}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.0"
-                        max="1.0"
-                        step="0.05"
-                        value={aiModels.recencyWeight}
-                        onChange={(e) => setAiModels({ ...aiModels, recencyWeight: parseFloat(e.target.value) })}
-                        className="w-full h-1 bg-[var(--sidebar-toggle-bg)] rounded-lg appearance-none cursor-pointer accent-[var(--primary)]"
-                      />
-                      <p className="text-[10px] text-[var(--sidebar-text-muted)]">
-                        Weights newer emails & signals higher. 0.0 relies strictly on semantic similarity.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg bg-[var(--primary)]/5 border border-[var(--primary)]/10 p-4 flex gap-3 text-xs text-[var(--foreground-color)]/90">
-                    <Database className="h-5 w-5 text-[var(--primary)] shrink-0 mt-0.5" />
+              <div className="space-y-6">
+                {/* 1. Groq key */}
+                <div className="border border-white/5 bg-[#0d0d14]/40 p-5 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-semibold text-[var(--foreground-color)] mb-0.5">Embeddings engine specifications</p>
-                      <p className="leading-relaxed">
-                        Currently using local FastEmbed generation with the <span className="font-mono text-[var(--primary)]">BAAI/bge-small-en-v1.5</span> model. This yields a dense 384-dimensional vector, keeping Qdrant indexing extremely fast, fully local, and free from external OpenAI/Cohere costs.
-                      </p>
+                      <h4 className="text-sm font-semibold text-white">Groq AI Provider</h4>
+                      <p className="text-xs text-slate-400 mt-1">Powers fast inference and agent reasoning routines.</p>
+                    </div>
+                    <div>
+                      {llmStatus.groq.connected ? (
+                        <Badge variant="success">✓ Configured</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="opacity-60">Not configured</Badge>
+                      )}
                     </div>
                   </div>
+                  
+                  {llmStatus.groq.error && (
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400">
+                      ⚠️ Connection Error: {llmStatus.groq.error}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showLlmKeys.groq ? "text" : "password"}
+                        placeholder={llmStatus.groq.connected ? "••••••••••••••••" : "gsk_..."}
+                        value={groqKey}
+                        onChange={(e) => setGroqKey(e.target.value)}
+                        className="bg-[#08080c] border border-white/10 text-white rounded-xl focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmKeys(prev => ({ ...prev, groq: !prev.groq }))}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                      >
+                        {showLlmKeys.groq ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      onClick={() => handleSaveLlmKey("groq", groqKey)}
+                      disabled={llmSaveLoading.groq || !groqKey.trim()}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl"
+                    >
+                      {llmSaveLoading.groq ? "Saving..." : "Update"}
+                    </Button>
+                    {llmStatus.groq.connected && (
+                      <Button
+                        variant="destructive"
+                        onClick={() => handleDeleteLlmKey("groq")}
+                        className="bg-rose-500/10 hover:bg-rose-650 border border-rose-500/15 text-rose-450 hover:text-white rounded-xl"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </CardContent>
-              <CardFooter className="border-t border-[var(--card-border)] px-6 py-4 flex justify-end">
-                <Button type="submit">
-                  Update Agent Config
-                </Button>
-              </CardFooter>
-            </form>
+
+                {/* 2. Nvidia NIM key */}
+                <div className="border border-white/5 bg-[#0d0d14]/40 p-5 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-white">Nvidia NIM</h4>
+                      <p className="text-xs text-slate-400 mt-1">Powers specialized large-context Llama and Qwen models.</p>
+                    </div>
+                    <div>
+                      {llmStatus.nvidia.connected ? (
+                        <Badge variant="success">✓ Configured</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="opacity-60">Not configured</Badge>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {llmStatus.nvidia.error && (
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400">
+                      ⚠️ Connection Error: {llmStatus.nvidia.error}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showLlmKeys.nvidia ? "text" : "password"}
+                        placeholder={llmStatus.nvidia.connected ? "••••••••••••••••" : "nvapi-..."}
+                        value={nvidiaKey}
+                        onChange={(e) => setNvidiaKey(e.target.value)}
+                        className="bg-[#08080c] border border-white/10 text-white rounded-xl focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmKeys(prev => ({ ...prev, nvidia: !prev.nvidia }))}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                      >
+                        {showLlmKeys.nvidia ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      onClick={() => handleSaveLlmKey("nvidia", nvidiaKey)}
+                      disabled={llmSaveLoading.nvidia || !nvidiaKey.trim()}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl"
+                    >
+                      {llmSaveLoading.nvidia ? "Saving..." : "Update"}
+                    </Button>
+                    {llmStatus.nvidia.connected && (
+                      <Button
+                        variant="destructive"
+                        onClick={() => handleDeleteLlmKey("nvidia")}
+                        className="bg-rose-500/10 hover:bg-rose-650 border border-rose-500/15 text-rose-450 hover:text-white rounded-xl"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 3. Xiaomi key */}
+                <div className="border border-white/5 bg-[#0d0d14]/40 p-5 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-white">Xiaomi MiMo LLM</h4>
+                      <p className="text-xs text-slate-400 mt-1">Powers specialized MiMo model integrations.</p>
+                    </div>
+                    <div>
+                      {llmStatus.xiaomi.connected ? (
+                        <Badge variant="success">✓ Configured</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="opacity-60">Not configured</Badge>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {llmStatus.xiaomi.error && (
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400">
+                      ⚠️ Connection Error: {llmStatus.xiaomi.error}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showLlmKeys.xiaomi ? "text" : "password"}
+                        placeholder={llmStatus.xiaomi.connected ? "••••••••••••••••" : "xiaomi-api-key..."}
+                        value={xiaomiKey}
+                        onChange={(e) => setXiaomiKey(e.target.value)}
+                        className="bg-[#08080c] border border-white/10 text-white rounded-xl focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmKeys(prev => ({ ...prev, xiaomi: !prev.xiaomi }))}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                      >
+                        {showLlmKeys.xiaomi ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      onClick={() => handleSaveLlmKey("xiaomi", xiaomiKey)}
+                      disabled={llmSaveLoading.xiaomi || !xiaomiKey.trim()}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl"
+                    >
+                      {llmSaveLoading.xiaomi ? "Saving..." : "Update"}
+                    </Button>
+                    {llmStatus.xiaomi.connected && (
+                      <Button
+                        variant="destructive"
+                        onClick={() => handleDeleteLlmKey("xiaomi")}
+                        className="bg-rose-500/10 hover:bg-rose-650 border border-rose-500/15 text-rose-450 hover:text-white rounded-xl"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
           </Card>
         </TabsContent>
 
         {/* 3. Integrations Tab Content */}
         <TabsContent value="integrations">
-          <div className="grid gap-6 lg:grid-cols-3">
-            {/* Left side: API Integrations */}
-            <div className="lg:col-span-2 space-y-6">
-              {/* Gmail Connection */}
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Mail className="h-5 w-5 text-[var(--primary)]" />
-                      Gmail / Google Workspace Senders
-                    </CardTitle>
-                    <CardDescription className="mt-1">
-                      Manage connected email accounts used for automated campaigns.
-                    </CardDescription>
+          <div className="space-y-8">
+            {/* Gmail accounts - preserved from original */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Mail className="h-5 w-5 text-[var(--primary)]" />
+                    Gmail / Google Workspace Senders
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Manage connected email accounts used for automated campaigns.
+                  </CardDescription>
+                </div>
+                <Button
+                  onClick={handleConnectGmail}
+                  disabled={gmailConnecting}
+                  variant="outline"
+                  size="sm"
+                >
+                  {gmailConnecting ? "Loading OAuth..." : "+ Add Sender"}
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {gmailLoading ? (
+                  <div className="py-4 text-center text-xs text-[var(--sidebar-text-muted)] animate-pulse">
+                    Retrieving connected accounts...
                   </div>
-                  <Button
-                    onClick={handleConnectGmail}
-                    disabled={gmailConnecting}
-                    variant="outline"
-                    size="sm"
-                  >
-                    {gmailConnecting ? "Loading OAuth..." : "+ Add Sender"}
-                  </Button>
-                </CardHeader>
-                <CardContent>
-                  {gmailLoading ? (
-                    <div className="py-4 text-center text-xs text-[var(--sidebar-text-muted)] animate-pulse">
-                      Retrieving connected accounts...
-                    </div>
-                  ) : gmailAccounts.length === 0 ? (
-                    <div className="py-6 border border-dashed border-[var(--card-border)] rounded-lg text-center">
-                      <Link2Off className="h-8 w-8 mx-auto mb-2 text-[var(--sidebar-text-muted)]" />
-                      <p className="text-sm font-semibold text-[var(--foreground-color)]">No active senders connected</p>
-                      <p className="text-xs text-[var(--sidebar-text-muted)] mt-1 max-w-sm mx-auto">
-                        Authenticate with Google OAuth to authorize outreach campaigns to send emails.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {gmailAccounts.map((account) => (
-                        <div
-                          key={account.id}
-                          className="flex items-center justify-between border border-[var(--card-border)] bg-[var(--sidebar-toggle-bg)]/40 p-4 rounded-lg hover:border-[var(--card-border)]/80 transition-colors"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="h-9 w-9 rounded-full bg-[var(--primary)]/10 border border-[var(--primary)]/25 flex items-center justify-center text-[var(--primary)]">
-                              <Mail className="h-4 w-4" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-semibold text-[var(--foreground-color)]">{account.email}</p>
-                              <div className="flex gap-2 items-center mt-0.5">
-                                <Badge variant={account.is_active ? "success" : "warning"} className="scale-90 origin-left">
-                                  {account.is_active ? "Active" : "Paused"}
-                                </Badge>
-                                <span className="text-[10px] text-[var(--sidebar-text-muted)]">ID: {account.id}</span>
-                              </div>
+                ) : gmailAccounts.length === 0 ? (
+                  <div className="py-6 border border-dashed border-[var(--card-border)] rounded-lg text-center">
+                    <Link2Off className="h-8 w-8 mx-auto mb-2 text-[var(--sidebar-text-muted)]" />
+                    <p className="text-sm font-semibold text-[var(--foreground-color)]">No active senders connected</p>
+                    <p className="text-xs text-[var(--sidebar-text-muted)] mt-1 max-w-sm mx-auto">
+                      Authenticate with Google OAuth to authorize outreach campaigns to send emails.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {gmailAccounts.map((account) => (
+                      <div
+                        key={account.id}
+                        className="flex items-center justify-between border border-[var(--card-border)] bg-[var(--sidebar-toggle-bg)]/40 p-4 rounded-lg hover:border-[var(--card-border)]/80 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-full bg-[var(--primary)]/10 border border-[var(--primary)]/25 flex items-center justify-center text-[var(--primary)]">
+                            <Mail className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-[var(--foreground-color)]">{account.email}</p>
+                            <div className="flex gap-2 items-center mt-0.5">
+                              <Badge variant={account.is_active ? "success" : "warning"} className="scale-90 origin-left">
+                                {account.is_active ? "Active" : "Paused"}
+                              </Badge>
+                              <span className="text-[10px] text-[var(--sidebar-text-muted)]">ID: {account.id}</span>
                             </div>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDisconnectGmail(account.id)}
-                            className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                            title="Disconnect Account"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* API Overrides */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Key className="h-5 w-5 text-[var(--primary)]" />
-                    API Integrations Overrides
-                  </CardTitle>
-                  <CardDescription>
-                    Custom client-side key overrides. If blank, the platform defaults to server-side keys configured in the backend's <span className="font-mono text-[var(--primary)]">.env</span> file.
-                  </CardDescription>
-                </CardHeader>
-                <form onSubmit={handleApiKeysSave}>
-                  <CardContent className="space-y-4">
-                    {apiKeysSuccess && (
-                      <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-sm text-emerald-400">
-                        <Check className="h-4 w-4" />
-                        {apiKeysSuccess}
-                      </div>
-                    )}
-
-                    {/* Apollo Key */}
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="apollo" className="flex items-center gap-1.5">
-                          Apollo.io API Key
-                          {apiKeys.apolloApiKey ? (
-                            <Badge variant="success" className="scale-75 origin-left">Custom Override</Badge>
-                          ) : (
-                            <Badge variant="outline" className="scale-75 origin-left">Default Server Env</Badge>
-                          )}
-                        </Label>
-                        {apiKeys.apolloApiKey && (
-                          <button
-                            type="button"
-                            onClick={() => clearApiKeyOverride("apolloApiKey")}
-                            className="text-xs text-red-400 hover:underline hover:text-red-300"
-                          >
-                            Clear Override
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <Input
-                          id="apollo"
-                          type={showKeys["apollo"] ? "text" : "password"}
-                          placeholder={apiKeys.apolloApiKey ? "Override Active" : "Using server configured APOLLO_API_KEY"}
-                          value={apiKeys.apolloApiKey}
-                          onChange={(e) => setApiKeys({ ...apiKeys, apolloApiKey: e.target.value })}
-                          className="pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => toggleShowKey("apollo")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--sidebar-text-muted)] hover:text-[var(--foreground-color)]"
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDisconnectGmail(account.id)}
+                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                          title="Disconnect Account"
                         >
-                          {showKeys["apollo"] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
-                    </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
-                    {/* Hunter Key */}
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="hunter" className="flex items-center gap-1.5">
-                          Hunter.io API Key
-                          {apiKeys.hunterApiKey ? (
-                            <Badge variant="success" className="scale-75 origin-left">Custom Override</Badge>
-                          ) : (
-                            <Badge variant="outline" className="scale-75 origin-left">Default Server Env</Badge>
-                          )}
-                        </Label>
-                        {apiKeys.hunterApiKey && (
-                          <button
-                            type="button"
-                            onClick={() => clearApiKeyOverride("hunterApiKey")}
-                            className="text-xs text-red-400 hover:underline hover:text-red-300"
-                          >
-                            Clear Override
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <Input
-                          id="hunter"
-                          type={showKeys["hunter"] ? "text" : "password"}
-                          placeholder={apiKeys.hunterApiKey ? "Override Active" : "Using server configured HUNTER_API_KEY"}
-                          value={apiKeys.hunterApiKey}
-                          onChange={(e) => setApiKeys({ ...apiKeys, hunterApiKey: e.target.value })}
-                          className="pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => toggleShowKey("hunter")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--sidebar-text-muted)] hover:text-[var(--foreground-color)]"
-                        >
-                          {showKeys["hunter"] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Tavily Key */}
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="tavily" className="flex items-center gap-1.5">
-                          Tavily Search API Key
-                          {apiKeys.tavilyApiKey ? (
-                            <Badge variant="success" className="scale-75 origin-left">Custom Override</Badge>
-                          ) : (
-                            <Badge variant="outline" className="scale-75 origin-left">Default Server Env</Badge>
-                          )}
-                        </Label>
-                        {apiKeys.tavilyApiKey && (
-                          <button
-                            type="button"
-                            onClick={() => clearApiKeyOverride("tavilyApiKey")}
-                            className="text-xs text-red-400 hover:underline hover:text-red-300"
-                          >
-                            Clear Override
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <Input
-                          id="tavily"
-                          type={showKeys["tavily"] ? "text" : "password"}
-                          placeholder={apiKeys.tavilyApiKey ? "Override Active" : "Using server configured TAVILY_API_KEY"}
-                          value={apiKeys.tavilyApiKey}
-                          onChange={(e) => setApiKeys({ ...apiKeys, tavilyApiKey: e.target.value })}
-                          className="pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => toggleShowKey("tavily")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--sidebar-text-muted)] hover:text-[var(--foreground-color)]"
-                        >
-                          {showKeys["tavily"] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Firecrawl Key */}
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="firecrawl" className="flex items-center gap-1.5">
-                          Firecrawl Web Scraper Key
-                          {apiKeys.firecrawlApiKey ? (
-                            <Badge variant="success" className="scale-75 origin-left">Custom Override</Badge>
-                          ) : (
-                            <Badge variant="outline" className="scale-75 origin-left">Default Server Env</Badge>
-                          )}
-                        </Label>
-                        {apiKeys.firecrawlApiKey && (
-                          <button
-                            type="button"
-                            onClick={() => clearApiKeyOverride("firecrawlApiKey")}
-                            className="text-xs text-red-400 hover:underline hover:text-red-300"
-                          >
-                            Clear Override
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <Input
-                          id="firecrawl"
-                          type={showKeys["firecrawl"] ? "text" : "password"}
-                          placeholder={apiKeys.firecrawlApiKey ? "Override Active" : "Using server configured FIRECRAWL_API_KEY"}
-                          value={apiKeys.firecrawlApiKey}
-                          onChange={(e) => setApiKeys({ ...apiKeys, firecrawlApiKey: e.target.value })}
-                          className="pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => toggleShowKey("firecrawl")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--sidebar-text-muted)] hover:text-[var(--foreground-color)]"
-                        >
-                          {showKeys["firecrawl"] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  </CardContent>
-                  <CardFooter className="border-t border-[var(--card-border)] px-6 py-4 flex justify-end">
-                    <Button type="submit">
-                      Save Override Keys
-                    </Button>
-                  </CardFooter>
-                </form>
-              </Card>
-            </div>
-
-            {/* Right side: Database / Infrastructure details */}
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-[var(--primary)]" />
-                    Vector Engine Details
-                  </CardTitle>
-                  <CardDescription>
-                    Qdrant database cluster configurations and indexes.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4 text-xs text-[var(--foreground-color)]/90">
-                  <div className="flex justify-between border-b border-[var(--card-border)] pb-2">
-                    <span className="text-[var(--sidebar-text-muted)]">Database Engine</span>
-                    <span className="text-[var(--foreground-color)] font-semibold">Qdrant Local</span>
-                  </div>
-                  <div className="flex justify-between border-b border-[var(--card-border)] pb-2">
-                    <span className="text-[var(--sidebar-text-muted)]">Host Address</span>
-                    <span className="font-mono text-[var(--foreground-color)]">localhost</span>
-                  </div>
-                  <div className="flex justify-between border-b border-[var(--card-border)] pb-2">
-                    <span className="text-[var(--sidebar-text-muted)]">Host Port</span>
-                    <span className="font-mono text-[var(--foreground-color)]">6333</span>
-                  </div>
-                  <div className="flex justify-between border-b border-[var(--card-border)] pb-2">
-                    <span className="text-[var(--sidebar-text-muted)]">Active Collection</span>
-                    <span className="font-mono text-[var(--primary)]">leads</span>
-                  </div>
-                  <div>
-                    <span className="text-[var(--sidebar-text-muted)] block mb-1">Index Collections</span>
-                    <div className="flex flex-wrap gap-1">
-                      <span className="bg-[var(--sidebar-toggle-bg)] border border-[var(--card-border)] px-2 py-0.5 rounded text-[10px] text-[var(--foreground-color)] font-mono">campaigns</span>
-                      <span className="bg-[var(--sidebar-toggle-bg)] border border-[var(--card-border)] px-2 py-0.5 rounded text-[10px] text-[var(--foreground-color)] font-mono">leads</span>
-                      <span className="bg-[var(--sidebar-toggle-bg)] border border-[var(--card-border)] px-2 py-0.5 rounded text-[10px] text-[var(--foreground-color)] font-mono">emails</span>
-                      <span className="bg-[var(--sidebar-toggle-bg)] border border-[var(--card-border)] px-2 py-0.5 rounded text-[10px] text-[var(--foreground-color)] font-mono">replies</span>
-                      <span className="bg-[var(--sidebar-toggle-bg)] border border-[var(--card-border)] px-2 py-0.5 rounded text-[10px] text-[var(--foreground-color)] font-mono">company_research</span>
-                      <span className="bg-[var(--sidebar-toggle-bg)] border border-[var(--card-border)] px-2 py-0.5 rounded text-[10px] text-[var(--foreground-color)] font-mono">signals</span>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-emerald-500" />
-                    MongoDB Cluster
-                  </CardTitle>
-                  <CardDescription>
-                    Relational storage specifications.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2 text-xs text-[var(--foreground-color)]/90">
-                  <div className="flex justify-between border-b border-[var(--card-border)] pb-2">
-                    <span className="text-[var(--sidebar-text-muted)]">DB Host</span>
-                    <span className="font-mono text-[var(--foreground-color)]">mongodb://localhost:27017</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--sidebar-text-muted)]">Database Name</span>
-                    <span className="font-mono text-emerald-500">outreach_ai</span>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+            {/* New: Integrations Center (DB-backed encrypted credentials) */}
+            <IntegrationsCenter />
           </div>
         </TabsContent>
+
+
 
         {/* 4. Preferences Tab Content */}
         <TabsContent value="preferences">

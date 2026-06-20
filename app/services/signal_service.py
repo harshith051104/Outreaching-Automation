@@ -40,23 +40,26 @@ class SignalService:
         to MongoDB + Qdrant.
         """
         db = await get_database()
+        lead = await db.leads.find_one({"id": lead_id})
+        user_id = lead.get("user_id") if lead else None
+
         raw_context = []
 
         search_query = f"{company_name} hiring jobs funding press release tech stack expansion"
         logger.info("Gathering Tavily signals for %s...", company_name)
-        tavily_results = await self.tavily.search(query=search_query, max_results=4)
+        tavily_results = await self.tavily.search(query=search_query, max_results=4, user_id=user_id)
         for r in tavily_results:
             raw_context.append(f"Source: {r.get('url')}\nContent: {r.get('content')}")
 
         if website_url:
             logger.info("Scraping website '%s' with Firecrawl for main page insights...", website_url)
-            scraped_content = await self.firecrawl.scrape_url(website_url)
+            scraped_content = await self.firecrawl.scrape_url(website_url, user_id=user_id)
             if scraped_content:
                 raw_context.append(f"Main Website Content:\n{scraped_content[:4000]}")
                 
             careers_url = f"{website_url.rstrip('/')}/careers"
             logger.info("Attempting Careers crawl on '%s'...", careers_url)
-            careers_content = await self.firecrawl.scrape_url(careers_url)
+            careers_content = await self.firecrawl.scrape_url(careers_url, user_id=user_id)
             if careers_content:
                 raw_context.append(f"Careers Page Content:\n{careers_content[:4000]}")
 
@@ -65,7 +68,7 @@ class SignalService:
             logger.warning("No signal data retrieved for %s. Creating blank signals.", company_name)
             return []
 
-        extracted_data = await self._parse_signals_with_llm(company_name, context_str)
+        extracted_data = await self._parse_signals_with_llm(company_name, context_str, user_id=user_id)
         
         stored_signals = []
         
@@ -122,11 +125,8 @@ class SignalService:
 
         return stored_signals
 
-    async def _parse_signals_with_llm(self, company_name: str, context: str) -> Dict[str, Any]:
+    async def _parse_signals_with_llm(self, company_name: str, context: str, user_id: str | None = None) -> Dict[str, Any]:
         """Utilise UnifiedLLMRouter to parse unstructured news and text into standard JSON."""
-        from groq import Groq
-        from app.config.settings import settings
-
         system_prompt = (
             "You are a Signal Intelligence Agent. Your job is to extract business signals from the text context.\n"
             "Categorize signals (e.g. Sales Expansion, Pricing Adjustment, Funding, Tech Stack Update).\n"
@@ -155,7 +155,8 @@ class SignalService:
         )
 
         def _call_groq(model: str) -> str:
-            client = Groq(api_key=settings.GROQ_API_KEY)
+            from app.config.groq_config import get_groq_client
+            client = get_groq_client(user_id)
             resp = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -194,6 +195,7 @@ class SignalService:
         if not lead:
             raise ValueError(f"Lead not found for ID: {lead_id}")
             
+        user_id = lead.get("user_id")
         signals = await db.signals.find({"lead_id": lead_id}).to_list(length=100)
         
         company_name = lead.get("company", "Target Company")
@@ -217,7 +219,7 @@ class SignalService:
         )
         
         opportunity_result = await self._run_opportunity_agent_llm(
-            company_name, research_context, signals_context
+            company_name, research_context, signals_context, user_id=user_id
         )
         
         opportunity_doc = {
@@ -240,12 +242,9 @@ class SignalService:
         return opportunity_doc
 
     async def _run_opportunity_agent_llm(
-        self, company_name: str, research: str, signals: str
+        self, company_name: str, research: str, signals: str, user_id: str | None = None
     ) -> Dict[str, Any]:
         """Runs the Opportunity Intelligence Agent LLM prompt."""
-        from groq import Groq
-        from app.config.settings import settings
-        
         system_prompt = (
             "You are an Opportunity Intelligence Agent. Your job is to analyze company research "
             "and scraped signals to identify sales opportunities.\n"
@@ -267,7 +266,8 @@ class SignalService:
         )
         
         def _call_groq(model: str) -> str:
-            client = Groq(api_key=settings.GROQ_API_KEY)
+            from app.config.groq_config import get_groq_client
+            client = get_groq_client(user_id)
             resp = client.chat.completions.create(
                 model=model,
                 messages=[

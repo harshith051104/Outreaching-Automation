@@ -186,7 +186,7 @@ async def process_due_actions(user_id: str) -> Dict[str, Any]:
                     action.get("message", ""),
                     user_id,
                 )
-            elif action_type in ("message", "followup"):
+            elif action_type in ("message", "followup", "first_message"):
                 from app.services.linkedin_outreach_service import send_message
                 result = await send_message(
                     action.get("linkedin_url"),

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from groq import Groq
 
 from app.config.settings import settings
+from app.config.groq_config import llm_chat_completion
 from app.config.mongodb_config import get_database
 from app.services.campaign_service import (
     create_campaign,
@@ -51,6 +52,26 @@ def _validate_email(email: str) -> bool:
 def _is_uuid(s: str) -> bool:
     """Check if a string looks like a UUID."""
     return bool(re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', s, re.IGNORECASE))
+
+
+async def _resolve_campaign_id(campaign_id: str, user_id: str, db) -> str:
+    """Resolve a campaign name or alias to the database campaign ID."""
+    if not campaign_id:
+        return ""
+    campaign_id_str = str(campaign_id).strip()
+    if not campaign_id_str:
+        return ""
+    if _is_uuid(campaign_id_str):
+        return campaign_id_str
+    # Search by name case-insensitively
+    campaign = await db.campaigns.find_one({
+        "name": {"$regex": f"^{re.escape(campaign_id_str)}$", "$options": "i"},
+        "user_id": user_id
+    })
+    if campaign:
+        return campaign["id"]
+    return campaign_id_str
+
 
 
 async def _resolve_message_templates(msg: str, user_id: str) -> str:
@@ -96,37 +117,91 @@ async def _resolve_message_templates(msg: str, user_id: str) -> str:
     return msg.strip()
 
 
+async def _generate_ai_outreach_message(user_id: str, lead: dict) -> str:
+    from app.config.groq_config import get_groq_client
+    from app.config.settings import settings
+    
+    lead_name = lead.get("name", "there")
+    company = lead.get("company", "your company")
+    focus = lead.get("focus", "")
+    
+    system_prompt = (
+        "You are an expert sales outreach assistant generating a LinkedIn first connection message. "
+        "Create a short, engaging, and professional first outreach message to the lead. "
+        "Keep it under 300 characters, and do NOT use generic placeholders or emojis."
+    )
+    user_prompt = f"Lead Name: {lead_name}\nCompany: {company}\nFocus: {focus}\nGenerate the message."
+    
+    try:
+        client = get_groq_client(user_id)
+        model = getattr(settings, "GROQ_MODEL", "llama3-70b-8192")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=150
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.warning("Failed to generate AI outreach message: %s", exc)
+        return f"Hi {lead_name}, I came across your profile and was impressed with your experience. I'd love to connect and learn more about your work."
+
+
+async def _generate_ai_reply_message(user_id: str, lead: dict, conv: dict, outbound_actions: list) -> str:
+    from app.config.groq_config import get_groq_client
+    from app.config.settings import settings
+    
+    lead_name = lead.get("name", "there")
+    company = lead.get("company", "your company")
+    focus = lead.get("focus", "")
+    
+    history_str = ""
+    if outbound_actions:
+        history_str += "Outbound Messages Sent:\n"
+        for act in sorted(outbound_actions, key=lambda x: x.get("created_at") or ""):
+            history_str += f"- {act.get('message')}\n"
+            
+    last_inbound = conv.get("last_message_preview", "") if conv else ""
+    if last_inbound:
+        history_str += f"Inbound Reply Received:\n\"{last_inbound}\"\n"
+        
+    system_prompt = (
+        "You are an expert sales assistant drafting a response to a lead's LinkedIn reply. "
+        "Analyze the message history and the lead's response. Write a professional, context-aware reply. "
+        "Do NOT use placeholders like [Your Name] or emojis. End with a polite sign-off."
+    )
+    user_prompt = f"Lead: {lead_name} at {company} ({focus})\n\nHistory:\n{history_str}\nDraft response:"
+    
+    try:
+        client = get_groq_client(user_id)
+        model = getattr(settings, "GROQ_MODEL", "llama3-70b-8192")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=250
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.warning("Failed to generate AI reply message: %s", exc)
+        return f"Hi {lead_name}, thank you for your response. I'd love to learn more about your current initiatives."
+
+
 async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list = None, background_tasks = None) -> str:
     """Execute the corresponding tool function and return output as a string."""
     db = await get_database()
     _uploaded_files = uploaded_files or []
 
     try:
-        # ── Campaign Tools ──────────────────────────────────────────────
-        if name == "generate_workflow_flow":
-            import uuid
-            db = await get_database()
-            flow_id = str(uuid.uuid4())
-            flow_doc = {
-                "id": flow_id,
-                "user_id": user_id,
-                "name": args["name"],
-                "description": args.get("description", "AI-Generated visual flow"),
-                "nodes": args["nodes"],
-                "edges": args["edges"],
-                "status": "draft",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-            await db.campaign_flows.insert_one(flow_doc)
-            return json.dumps({
-                "status": "success",
-                "flow_id": flow_id,
-                "name": args["name"],
-                "message": f"Successfully created and saved visual campaign flow '{args['name']}' with {len(args['nodes'])} nodes."
-            })
 
-        elif name == "list_campaigns":
+
+        if name == "list_campaigns":
             campaigns = await get_campaigns(user_id=user_id, limit=50)
             return json.dumps(campaigns, default=str)
 
@@ -231,7 +306,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             return json.dumps({"status": "success", "message": "Campaign paused", "campaign": campaign}, default=str)
 
         elif name == "delete_campaign":
-            campaign_id = args["campaign_id"]
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
             await db.campaigns.update_one(
                 {"id": campaign_id, "user_id": user_id},
                 {"$set": {"status": "deleted", "updated_at": datetime.now(timezone.utc)}}
@@ -239,7 +314,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             return json.dumps({"status": "success", "message": f"Campaign {campaign_id} deleted"})
 
         elif name == "duplicate_campaign":
-            campaign_id = args["campaign_id"]
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
             original = await db.campaigns.find_one({"id": campaign_id, "user_id": user_id}, {"_id": 0})
             if not original:
                 return json.dumps({"error": "Campaign not found"})
@@ -276,12 +351,13 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             return json.dumps(campaigns, default=str)
 
         elif name == "get_campaign_analytics":
-            stats = await get_campaign_stats(campaign_id=args["campaign_id"])
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
+            stats = await get_campaign_stats(campaign_id=campaign_id)
             return json.dumps(stats, default=str)
 
         # ── Lead Tools ──────────────────────────────────────────────────
         elif name == "list_leads":
-            campaign_id = args.get("campaign_id")
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
             leads = await get_leads(campaign_id=campaign_id, user_id=user_id, limit=50)
             return json.dumps(leads, default=str)
 
@@ -302,7 +378,10 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                 if campaign:
                     campaign_id = campaign["id"]
                 else:
-                    return json.dumps({"error": f"Campaign '{campaign_id}' not found"})
+                    # Auto-create the campaign if the LLM provided a name but it wasn't found
+                    default = CampaignCreate(name=campaign_id if campaign_id != "/" else "New AI Campaign", settings=CampaignSettings())
+                    result = await create_campaign(user_id=user_id, data=default)
+                    campaign_id = result["id"]
 
             if not campaign_id:
                 campaign = await db.campaigns.find_one({"user_id": user_id, "status": {"$ne": "deleted"}})
@@ -326,7 +405,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
 
         elif name == "bulk_add_leads":
             leads_data = args.get("leads", [])
-            campaign_id = args.get("campaign_id", "")
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id", ""), user_id, db)
             if not campaign_id:
                 campaign = await db.campaigns.find_one({"user_id": user_id})
                 if campaign:
@@ -354,8 +433,8 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             return json.dumps({"status": "success", "results": results, "campaign_id": campaign_id}, default=str)
 
         elif name == "move_leads":
-            source_campaign_id = args["source_campaign_id"]
-            target_campaign_id = args["target_campaign_id"]
+            source_campaign_id = await _resolve_campaign_id(args["source_campaign_id"], user_id, db)
+            target_campaign_id = await _resolve_campaign_id(args["target_campaign_id"], user_id, db)
             result = await db.leads.update_many(
                 {"campaign_id": source_campaign_id, "user_id": user_id},
                 {"$set": {"campaign_id": target_campaign_id, "updated_at": datetime.now(timezone.utc)}}
@@ -387,9 +466,17 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             ).to_list(50)
             return json.dumps(accounts, default=str)
 
+        elif name == "list_tracker_users":
+            cursor = db.users.find(
+                {},
+                {"_id": 0, "id": 1, "name": 1, "display_name": 1, "email": 1, "role": 1}
+            ).sort("display_name", 1)
+            users = await cursor.to_list(length=100)
+            return json.dumps(users, default=str)
+
         # ── Email Tools ─────────────────────────────────────────────────
         elif name == "list_emails":
-            campaign_id = args.get("campaign_id")
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
             query = {"user_id": user_id}
             if campaign_id:
                 query["campaign_id"] = campaign_id
@@ -445,6 +532,28 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                         "created_at": datetime.now(timezone.utc),
                     }
                     await db.linkedin_actions.insert_one(action_doc)
+                    
+                    # Also insert into pending_approvals
+                    lead = await db.leads.find_one({"linkedin": linkedin_url, "user_id": user_id})
+                    lead_id = lead["id"] if lead else ""
+                    approval_doc = {
+                        "action_id": action_id,
+                        "user_id": user_id,
+                        "action_type": "linkedin_connections",
+                        "description": f"Send connection request to {linkedin_url}",
+                        "count": 1,
+                        "items": [linkedin_url],
+                        "payload": {
+                            "lead_ids": [lead_id] if lead_id else [],
+                            "note": note,
+                            "linkedin_url": linkedin_url
+                        },
+                        "status": "pending",
+                        "created_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                    await db.pending_approvals.insert_one(approval_doc)
+                    
                     res = {
                         "status": "success",
                         "action_id": action_id,
@@ -505,6 +614,29 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     "created_at": datetime.now(timezone.utc),
                 }
                 await db.linkedin_actions.insert_one(action_doc)
+                
+                # Also insert into pending_approvals
+                lead = await db.leads.find_one({"linkedin": linkedin_url, "user_id": user_id})
+                lead_id = lead["id"] if lead else ""
+                approval_doc = {
+                    "action_id": action_id,
+                    "user_id": user_id,
+                    "action_type": "linkedin_messages",
+                    "description": f"Send message to {linkedin_url}",
+                    "count": 1,
+                    "items": [linkedin_url],
+                    "payload": {
+                        "action_id": action_id,
+                        "lead_ids": [lead_id] if lead_id else [],
+                        "message": msg,
+                        "linkedin_url": linkedin_url
+                    },
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                await db.pending_approvals.insert_one(approval_doc)
+                
                 res = {
                     "status": "success",
                     "action_id": action_id,
@@ -534,6 +666,26 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     "created_at": datetime.now(timezone.utc),
                 }
                 await db.linkedin_actions.insert_one(action_doc)
+                
+                # Also insert into pending_approvals
+                approval_doc = {
+                    "action_id": action_id,
+                    "user_id": user_id,
+                    "action_type": "linkedin_messages",
+                    "description": f"Send message to {person_name}",
+                    "count": 1,
+                    "items": [person_name],
+                    "payload": {
+                        "action_id": action_id,
+                        "person_name": person_name,
+                        "message": msg
+                    },
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                await db.pending_approvals.insert_one(approval_doc)
+                
                 res = {
                     "status": "success",
                     "action_id": action_id,
@@ -641,6 +793,25 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     "created_at": datetime.now(timezone.utc),
                 }
                 await db.linkedin_actions.insert_one(action_doc)
+                
+                # Also insert into pending_approvals
+                approval_doc = {
+                    "action_id": action_id,
+                    "user_id": user_id,
+                    "action_type": "linkedin_follow",
+                    "description": f"Follow LinkedIn profile {linkedin_url}",
+                    "count": 1,
+                    "items": [linkedin_url],
+                    "payload": {
+                        "action_id": action_id,
+                        "linkedin_url": linkedin_url
+                    },
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                await db.pending_approvals.insert_one(approval_doc)
+                
                 res = {
                     "status": "success",
                     "action_id": action_id,
@@ -669,7 +840,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
 
         # ── Update Tools ────────────────────────────────────────────────
         elif name == "update_campaign":
-            campaign_id = args["campaign_id"]
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
             update_fields = {}
             if "name" in args and args["name"]:
                 update_fields["name"] = args["name"]
@@ -804,7 +975,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             from app.services.linkedin_csv_import_service import import_leads_from_csv, extract_linkedin_urls_from_text
             
             file_url = args.get("file_url", "")
-            campaign_id = args.get("campaign_id", "")
+            campaign_id = await _resolve_campaign_id(args.get("campaign_id", ""), user_id, db)
             
             if not file_url:
                 return json.dumps({"error": "file_url is required"})
@@ -838,6 +1009,176 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                 logger.exception("Error importing leads from file")
                 return json.dumps({"error": str(e)})
 
+        elif name == "show_accepted_connections":
+            limit = args.get("limit", 50)
+            # Find leads who are connected but first message is not sent
+            leads = await db.leads.find({
+                "user_id": user_id,
+                "linkedin_stage": "connected",
+                "linkedin_first_message_sent": False
+            }).sort("updated_at", -1).limit(limit).to_list(length=limit)
+
+            if not leads:
+                return json.dumps({
+                    "response": "There are no new accepted connections awaiting outreach.",
+                    "count": 0
+                })
+
+            # Pick the most recent one to queue for approval
+            lead = leads[0]
+            lead_name = lead.get("name", "Unknown")
+            company = lead.get("company", "")
+            focus = lead.get("focus", "")
+            linkedin_url = lead.get("linkedin") or lead.get("linkedin_url", "")
+            connected_at = lead.get("linkedin_connected_at")
+            connected_at_str = connected_at.strftime("%Y-%m-%d %H:%M:%S") if connected_at else "Recently"
+
+            # Generate first outreach message using LLM
+            message = await _generate_ai_outreach_message(user_id, lead)
+
+            # Insert pending action
+            from app.utils.id_generator import generate_id
+            action_id = generate_id()
+            action_doc = {
+                "id": action_id,
+                "user_id": user_id,
+                "lead_id": lead["id"],
+                "linkedin_url": linkedin_url,
+                "action_type": "message",
+                "status": "pending_approval",
+                "message": message,
+                "created_at": datetime.now(timezone.utc),
+            }
+            await db.linkedin_actions.insert_one(action_doc)
+
+            approval_doc = {
+                "action_id": action_id,
+                "user_id": user_id,
+                "action_type": "linkedin_messages",
+                "description": f"Suggested Message:\n\n{message}",
+                "count": 1,
+                "items": [linkedin_url],
+                "payload": {
+                    "action_id": action_id,
+                    "lead_ids": [lead["id"]],
+                    "message": message,
+                    "linkedin_url": linkedin_url
+                },
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            await db.pending_approvals.insert_one(approval_doc)
+
+            response_markdown = (
+                f"### Accepted Connection Details\n"
+                f"- **Lead**: {lead_name}\n"
+                f"- **Company**: {company}\n"
+                f"- **Focus area**: {focus}\n"
+                f"- **LinkedIn profile**: {linkedin_url}\n"
+                f"- **Acceptance date**: {connected_at_str}\n\n"
+                f"I have generated a suggested first outreach message and queued it for your approval below."
+            )
+
+            return json.dumps({
+                "response": response_markdown,
+                "pending_approval": {
+                    "action_id": action_id,
+                    "action_type": "linkedin_messages",
+                    "description": f"Suggested Message:\n\n{message}",
+                    "count": 1,
+                    "items": [linkedin_url],
+                    "status": "pending"
+                }
+            }, default=str)
+
+        elif name == "generate_reply":
+            target_url = args.get("linkedin_url", "").strip()
+            lead = None
+            if target_url:
+                lead = await db.leads.find_one({
+                    "user_id": user_id,
+                    "$or": [{"linkedin": target_url}, {"linkedin_url": target_url}]
+                })
+            else:
+                # Find most recent lead who replied
+                lead = await db.leads.find_one(
+                    {"user_id": user_id, "linkedin_reply_received": True},
+                    sort=[("updated_at", -1)]
+                )
+
+            if not lead:
+                return json.dumps({
+                    "response": "I couldn't find any recent LinkedIn replies to generate a response for.",
+                })
+
+            linkedin_url = lead.get("linkedin") or lead.get("linkedin_url", "")
+            lead_name = lead.get("name", "Unknown")
+
+            # Load message history
+            conv = await db.linkedin_conversations.find_one({"user_id": user_id, "contact_linkedin_url": linkedin_url})
+            outbound_actions = await db.linkedin_actions.find({
+                "user_id": user_id,
+                "linkedin_url": linkedin_url,
+                "status": "executed"
+            }).to_list(length=20)
+
+            # Generate reply message using LLM
+            message = await _generate_ai_reply_message(user_id, lead, conv, outbound_actions)
+
+            # Insert pending action
+            from app.utils.id_generator import generate_id
+            action_id = generate_id()
+            action_doc = {
+                "id": action_id,
+                "user_id": user_id,
+                "lead_id": lead["id"],
+                "linkedin_url": linkedin_url,
+                "action_type": "message",
+                "status": "pending_approval",
+                "message": message,
+                "created_at": datetime.now(timezone.utc),
+            }
+            await db.linkedin_actions.insert_one(action_doc)
+
+            approval_doc = {
+                "action_id": action_id,
+                "user_id": user_id,
+                "action_type": "linkedin_messages",
+                "description": f"Suggested Reply:\n\n{message}",
+                "count": 1,
+                "items": [linkedin_url],
+                "payload": {
+                    "action_id": action_id,
+                    "lead_ids": [lead["id"]],
+                    "message": message,
+                    "linkedin_url": linkedin_url
+                },
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            await db.pending_approvals.insert_one(approval_doc)
+
+            response_markdown = (
+                f"### Suggested Reply for {lead_name}\n"
+                f"- **Company**: {lead.get('company', '')}\n"
+                f"- **LinkedIn profile**: {linkedin_url}\n\n"
+                f"I have generated a context-aware reply message below for your approval."
+            )
+
+            return json.dumps({
+                "response": response_markdown,
+                "pending_approval": {
+                    "action_id": action_id,
+                    "action_type": "linkedin_messages",
+                    "description": f"Suggested Reply:\n\n{message}",
+                    "count": 1,
+                    "items": [linkedin_url],
+                    "status": "pending"
+                }
+            }, default=str)
+
         elif name == "list_linkedin_leads":
             from app.services.linkedin_csv_import_service import get_linkedin_leads_for_outreach
             
@@ -849,8 +1190,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             return json.dumps({"leads": result, "count": len(result)}, default=str)
 
         elif name == "bulk_linkedin_action":
-            from app.services.linkedin_csv_import_service import bulk_create_linkedin_actions
-            
+            from app.utils.id_generator import generate_id
             lead_ids = args.get("lead_ids", [])
             action_type = args.get("action_type", "connection_request")
             message = args.get("message", "")
@@ -862,14 +1202,39 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             if action_type == "send_message" and not message:
                 return json.dumps({"error": "message is required for send_message action"})
             
-            result = await bulk_create_linkedin_actions(
-                user_id=user_id,
-                lead_ids=lead_ids,
-                action_type=action_type,
-                message=message if message else None,
-                note=note if note else None,
-            )
-            return json.dumps(result, default=str)
+            # Fetch lead names for preview
+            leads_cursor = db.leads.find({"id": {"$in": lead_ids}, "user_id": user_id})
+            leads = await leads_cursor.to_list(length=100)
+            lead_names = [l.get("name") or l.get("email") for l in leads]
+            
+            action_id = generate_id()
+            approval_doc = {
+                "action_id": action_id,
+                "user_id": user_id,
+                "action_type": "linkedin_connections" if action_type == "connection_request" else "linkedin_messages",
+                "description": f"Bulk {action_type.replace('_', ' ')} to {len(lead_ids)} leads",
+                "count": len(lead_ids),
+                "items": lead_names,
+                "payload": {
+                    "lead_ids": lead_ids,
+                    "action_type": action_type,
+                    "message": message,
+                    "note": note,
+                    "is_bulk": True
+                },
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            await db.pending_approvals.insert_one(approval_doc)
+            
+            res = {
+                "status": "success",
+                "action_id": action_id,
+                "status_text": "pending_approval",
+                "message": f"Bulk LinkedIn {action_type} for {len(lead_ids)} leads created and queued for approval."
+            }
+            return json.dumps(res, default=str)
 
         else:
             return json.dumps({"error": f"Tool '{name}' not found."})
@@ -883,57 +1248,6 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
 
 CHATBOT_TOOLS = [
     # ── Campaign Tools ──────────────────────────────────────────────────
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_workflow_flow",
-            "description": "Generate a visual campaign flow diagram (n8n-style nodes & edges workflow) based on natural language requirements.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Flow name (e.g. 'LinkedIn Followup Sequence')"},
-                    "description": {"type": "string", "description": "Flow description"},
-                    "nodes": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "string"},
-                                "type": {"type": "string", "enum": ["linkedinSearch", "apolloSearch", "csvUpload", "manualLeads", "sendEmail", "linkedinConnect", "linkedinMessage", "delay", "enrichment", "aiAction", "condition", "humanApproval", "sendNotification"]},
-                                "data": {
-                                    "type": "object",
-                                    "properties": {
-                                        "label": {"type": "string"},
-                                        "parameters": {"type": "object"}
-                                    }
-                                },
-                                "position": {
-                                    "type": "object",
-                                    "properties": {
-                                        "x": {"type": "number"},
-                                        "y": {"type": "number"}
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "edges": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "string"},
-                                "source": {"type": "string"},
-                                "target": {"type": "string"},
-                                "sourceHandle": {"type": "string"}
-                            }
-                        }
-                    }
-                },
-                "required": ["name", "nodes", "edges"]
-            }
-        }
-    },
     {
         "type": "function",
         "function": {
@@ -1167,6 +1481,14 @@ CHATBOT_TOOLS = [
         "function": {
             "name": "list_gmail_accounts",
             "description": "List all connected Gmail accounts for sending emails.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tracker_users",
+            "description": "List all registered team members / users in the outreach tracker (e.g. John Doe, Supriya Gali) who can be assigned to leads.",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -1514,6 +1836,32 @@ CHATBOT_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_accepted_connections",
+            "description": "Show list of leads who accepted connection requests and generate suggested outreach messages for each.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Maximum number of connections to return (default 50)."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_reply",
+            "description": "Read conversation history for a lead and generate an AI suggested reply message for user approval.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "linkedin_url": {"type": "string", "description": "LinkedIn URL of the contact to generate a reply for. If not provided, it will find the most recent unreplied conversation."}
+                }
+            }
+        }
+    },
 ]
 
 
@@ -1644,6 +1992,19 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         for l in leads:
             formatted += f"- **{l['name']}** | {l['email']} | {l.get('company', 'N/A')} | Status: `{l['status']}`\n"
         return {"response": formatted, "actions_taken": [{"tool": "list_leads", "arguments": {"campaign_id": campaign_id}}]}
+
+    # 6b. List Tracker Users
+    if re.search(r"(?:list|show|get|display)\s+(?:all\s+)?(?:tracker\s+|team\s+)?users?\b", msg_lower) or "usertab" in msg_lower:
+        res = await execute_tool("list_tracker_users", {}, user_id)
+        users = json.loads(res)
+        if not users:
+            return {"response": "No users found in the outreach tracker.", "actions_taken": []}
+        formatted = "Registered users in the outreach tracker:\n"
+        for idx, u in enumerate(users, 1):
+            disp = u.get("display_name") or u.get("name", "Unknown")
+            role_str = f" ({u.get('role')})" if u.get("role") else ""
+            formatted += f"{idx}. **{disp}** - {u.get('email', 'No email')}{role_str}\n"
+        return {"response": formatted, "actions_taken": [{"tool": "list_tracker_users", "arguments": {}}]}
 
     # 7. Analytics
     analytics_match = re.search(r"(?:analytics|stats|statistics|metrics)\s+(?:for|of)?\s*(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?", message, re.IGNORECASE)
@@ -2007,6 +2368,48 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
             "actions_taken": [{"tool": "linkedin_query_memory", "arguments": {"query": query_text}}]
         }
 
+    # 15d. Show Accepted Connections
+    if re.search(r"\bshow\s+(?:new\s+)?accepted\s+(?:connections?|leads?)\b", msg_lower) or re.search(r"\baccepted\s+(?:connections?|leads?)\b", msg_lower):
+        res_str = await execute_tool("show_accepted_connections", {}, user_id)
+        res = json.loads(res_str)
+        if "error" in res:
+            return {"response": f"Failed to retrieve accepted connections: {res['error']}", "actions_taken": []}
+        return {
+            "response": res.get("response", ""),
+            "actions_taken": [{"tool": "show_accepted_connections", "arguments": {}}],
+            "pending_approval": res.get("pending_approval")
+        }
+
+    # 15e. Generate Reply
+    gen_reply_match = re.search(
+        r"(?:generate|suggest|draft)\s+(?:a\s+)?(?:reply|response)\s+(?:for|to)\s+([^\s,]+)",
+        message, re.IGNORECASE
+    )
+    if gen_reply_match or re.search(r"\bgenerate\s+(?:a\s+)?(?:reply|response)\b", msg_lower) or re.search(r"\bdraft\s+(?:a\s+)?(?:reply|response)\b", msg_lower):
+        target_url = gen_reply_match.group(1).strip() if gen_reply_match else ""
+        if target_url and not target_url.startswith("http") and "linkedin.com" not in target_url:
+            # If target_url is a name rather than a URL, let's search for a lead with that name
+            lead = await db.leads.find_one({
+                "user_id": user_id,
+                "name": {"$regex": f"^{re.escape(target_url)}$", "$options": "i"}
+            })
+            if lead:
+                target_url = lead.get("linkedin") or lead.get("linkedin_url", "")
+        
+        args = {}
+        if target_url:
+            args["linkedin_url"] = target_url
+            
+        res_str = await execute_tool("generate_reply", args, user_id)
+        res = json.loads(res_str)
+        if "error" in res:
+            return {"response": f"Failed to generate reply: {res['error']}", "actions_taken": []}
+        return {
+            "response": res.get("response", ""),
+            "actions_taken": [{"tool": "generate_reply", "arguments": args}],
+            "pending_approval": res.get("pending_approval")
+        }
+
     return None
 
 
@@ -2018,6 +2421,8 @@ async def handle_chatbot_chat(
     conversation_history: List[Dict[str, str]] = None,
     uploaded_files: List[Dict[str, str]] = None,
     background_tasks = None,
+    llm_provider: str = None,
+    llm_model: str = None,
 ) -> Dict[str, Any]:
     """
     Process chatbot message with tool calling. Falls back to rule-based parser if needed.
@@ -2027,29 +2432,46 @@ async def handle_chatbot_chat(
     """
     # Store uploaded files for use in tool execution
     _current_uploaded_files = uploaded_files or []
-    is_key_empty = not settings.GROQ_API_KEY or settings.GROQ_API_KEY.strip() in ("", '""', "''", "None")
-    if is_key_empty or groq_client is None:
+    
+    db = await get_database()
+    user = await db.users.find_one({"id": user_id})
+    user_name = user.get("name", "") if user else ""
+    user_email = user.get("email", "") if user else ""
+
+    config = await db.system_settings.find_one({"user_id": user_id, "type": "ai_config"})
+    db_api_key = config.get("llm_api_key", "") if config else ""
+
+    active_provider = (llm_provider or getattr(settings, "LLM_PROVIDER", "nvidia")).lower()
+    if active_provider == "nvidia":
+        active_model = llm_model or getattr(settings, "NVIDIA_NIM_MODEL", "qwen/qwen3.5-122b-a10b")
+        api_key = db_api_key or settings.NVIDIA_NIM_API_KEY
+    elif active_provider == "xiaomi":
+        active_model = llm_model or getattr(settings, "XIAOMI_MODEL", "mimo-v2.5")
+        api_key = db_api_key or settings.XIAOMI_API_KEY
+    else:
+        active_model = llm_model or getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
+        api_key = db_api_key or settings.GROQ_API_KEY
+
+    is_key_empty = not api_key or api_key.strip() in ("", '""', "''", "None")
+    if is_key_empty:
         fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
         if fallback_res:
             return fallback_res
         return {
             "response": (
-                "Elly offline (GROQ_API_KEY not set). Available commands:\n"
+                f"Elly offline (API_KEY not set). Available commands:\n"
                 "- **List campaigns**: 'list campaigns'\n"
                 "- **Create campaign**: 'create campaign named X'\n"
                 "- **Start campaign**: 'start campaign X'\n"
                 "- **Pause campaign**: 'pause campaign X'\n"
                 "- **Add lead**: 'add lead Name, email@example.com to campaign X'\n"
                 "- **List leads**: 'list leads'\n"
+                "- **List tracker users**: 'list tracker users'\n"
                 "- **Analytics**: 'analytics for campaign X'"
             ),
             "actions_taken": []
         }
 
-    db = await get_database()
-    user = await db.users.find_one({"id": user_id})
-    user_name = user.get("name", "") if user else ""
-    user_email = user.get("email", "") if user else ""
 
     history = conversation_history or []
     messages = [
@@ -2091,8 +2513,10 @@ async def handle_chatbot_chat(
                 "22. 'import leads from file' or 'upload CSV' → Call import_leads_from_file tool with the file_url from uploaded_files. The user can attach a CSV file to import LinkedIn leads. Extract the file_url from the uploaded_files parameter and pass it to the tool.\n"
                 "23. 'list linkedin leads' → Call list_linkedin_leads tool to show all leads with LinkedIn URLs.\n"
                 "24. 'bulk connect <lead_ids>' or 'send bulk message' → Call bulk_linkedin_action tool to create bulk connection requests or messages for multiple leads.\n"
-                "26. For general conversation, greetings, politeness, or questions about your capabilities, do NOT call any tools. Answer conversationally in plain text as Elly.\n\n"
-                "After tool executes, confirm what was done. If a tool returns a 'processing' status, tell the user that the action has been kicked off in the background and will appear in their pending queue shortly.\n"
+                "27. list tracker users or list team members or list users → Call list_tracker_users tool. Use this when the user asks to see registered team members/users instead of leads.\n"
+                "28. For general conversation, greetings, politeness, or questions about your capabilities, do NOT call any tools. Answer conversationally in plain text as Elly.\n"
+                "29. NEVER use emojis in any of your responses, conversations, or generated text.\n\n"
+                "After tool executes, confirm what was done. If a tool returns a processing status, tell the user that the action has been kicked off in the background and will appear in their pending queue shortly.\n"
                 "Use smart defaults: subject='Outreach', body='Hi {{first_name}}'.\n\n"
                 "FILE UPLOAD SUPPORT:\n"
                 "When user uploads a CSV file for lead import, the file info is in the uploaded_files parameter. Extract the 'url' field from each file object and use it with import_leads_from_file tool."
@@ -2120,33 +2544,37 @@ async def handle_chatbot_chat(
 
     for _ in range(5):
         try:
-            chat_completion = groq_client.chat.completions.create(
+            chat_completion = llm_chat_completion(
                 messages=messages,
-                model=settings.GROQ_MODEL,
+                model=active_model,
+                provider=active_provider,
                 tools=CHATBOT_TOOLS,
                 tool_choice="required" if force_tool and not tool_already_called else "auto",
-                temperature=0.3
+                temperature=0.3,
+                user_id=user_id
             )
         except Exception as e:
             # If tool_choice="required" fails, retry with "auto"
             error_str = str(e).lower()
             if any(term in error_str for term in ["tool choice", "tool_choice", "tool use", "tool_use"]):
                 try:
-                    chat_completion = groq_client.chat.completions.create(
+                    chat_completion = llm_chat_completion(
                         messages=messages,
-                        model=settings.GROQ_MODEL,
+                        model=active_model,
+                        provider=active_provider,
                         tools=CHATBOT_TOOLS,
                         tool_choice="auto",
-                        temperature=0.3
+                        temperature=0.3,
+                        user_id=user_id
                     )
                 except Exception as e2:
-                    logger.exception("Error calling Groq API (retry)")
+                    logger.exception("Error calling LLM (retry)")
                     fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
                     if fallback_res:
                         return fallback_res
                     return {"response": f"AI model error: {e2}", "actions_taken": actions_taken}
             else:
-                logger.exception("Error calling Groq API")
+                logger.exception("Error calling LLM")
                 fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
                 if fallback_res:
                     return fallback_res
@@ -2160,9 +2588,30 @@ async def handle_chatbot_chat(
                 fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
                 if fallback_res and fallback_res.get("actions_taken"):
                     return fallback_res
-            return {"response": assistant_content, "actions_taken": actions_taken}
+            
+            # Look for pending approvals in the tool outputs
+            pending_approval = None
+            for m in messages:
+                if m.get("role") == "tool":
+                    try:
+                        out_data = json.loads(m["content"])
+                        if isinstance(out_data, dict) and "action_id" in out_data:
+                            action_id = out_data["action_id"]
+                            app_doc = await db.pending_approvals.find_one({"action_id": action_id})
+                            if app_doc:
+                                app_doc.pop("_id", None)
+                                pending_approval = app_doc
+                                break
+                    except Exception:
+                        pass
+                        
+            return {
+                "response": assistant_content,
+                "actions_taken": actions_taken,
+                "pending_approval": pending_approval
+            }
 
-        # Convert response_message to dict to avoid serialization issues with Groq client
+        # Convert response_message to dict to avoid serialization issues
         msg_dict = {
             "role": "assistant",
             "content": response_message.content or ""
@@ -2210,17 +2659,52 @@ async def handle_chatbot_chat(
             break
 
     try:
-        final_completion = groq_client.chat.completions.create(
+        final_completion = llm_chat_completion(
             messages=messages,
-            model=settings.GROQ_MODEL,
-            temperature=0.3
+            model=active_model,
+            provider=active_provider,
+            temperature=0.3,
+            user_id=user_id
         )
-        return {"response": final_completion.choices[0].message.content or "", "actions_taken": actions_taken}
+        # Look for pending approvals in the tool outputs
+        pending_approval = None
+        for m in messages:
+            if m.get("role") == "tool":
+                try:
+                    out_data = json.loads(m["content"])
+                    if isinstance(out_data, dict) and "action_id" in out_data:
+                        action_id = out_data["action_id"]
+                        app_doc = await db.pending_approvals.find_one({"action_id": action_id})
+                        if app_doc:
+                            app_doc.pop("_id", None)
+                            pending_approval = app_doc
+                            break
+                except Exception:
+                    pass
+        return {
+            "response": final_completion.choices[0].message.content or "",
+            "actions_taken": actions_taken,
+            "pending_approval": pending_approval
+        }
     except Exception as e:
         # If final response fails, return a summary of what was done
+        pending_approval = None
+        for m in messages:
+            if m.get("role") == "tool":
+                try:
+                    out_data = json.loads(m["content"])
+                    if isinstance(out_data, dict) and "action_id" in out_data:
+                        action_id = out_data["action_id"]
+                        app_doc = await db.pending_approvals.find_one({"action_id": action_id})
+                        if app_doc:
+                            app_doc.pop("_id", None)
+                            pending_approval = app_doc
+                            break
+                except Exception:
+                    pass
         if actions_taken:
             summary = "Actions completed:\n"
             for action in actions_taken:
                 summary += f"- {action['tool']}: {json.dumps(action['arguments'])}\n"
-            return {"response": summary, "actions_taken": actions_taken}
+            return {"response": summary, "actions_taken": actions_taken, "pending_approval": pending_approval}
         return {"response": f"Response generation failed: {e}", "actions_taken": actions_taken}

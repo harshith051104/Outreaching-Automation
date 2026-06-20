@@ -33,12 +33,20 @@ async def register_user(data: RegisterRequest) -> dict:
         )
 
     now = datetime.now(timezone.utc)
+    # Determine role: first registered user becomes admin; subsequent are members
+    total_users = await db.users.count_documents({})
+    role = "admin" if total_users == 0 else "member"
+
+    display_name = getattr(data, "display_name", "") or data.name.strip()
+
     user_doc = {
         "id": generate_id(),
         "email": data.email.lower().strip(),
         "name": data.name.strip(),
+        "display_name": display_name,
         "password_hash": hash_password(data.password),
         "is_active": True,
+        "role": role,
         "created_at": now,
         "updated_at": now,
     }
@@ -49,6 +57,8 @@ async def register_user(data: RegisterRequest) -> dict:
         "id": user_doc["id"],
         "email": user_doc["email"],
         "name": user_doc["name"],
+        "display_name": user_doc["display_name"],
+        "role": user_doc["role"],
         "is_active": user_doc["is_active"],
         "created_at": user_doc["created_at"],
     }
@@ -92,6 +102,8 @@ async def login_user(data: LoginRequest) -> dict:
             "id": user["id"],
             "email": user["email"],
             "name": user["name"],
+            "display_name": user.get("display_name", user["name"]),
+            "role": user.get("role", "member"),
         },
     }
 

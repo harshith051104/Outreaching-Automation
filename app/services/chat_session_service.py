@@ -13,15 +13,34 @@ from app.config.mongodb_config import get_database
 from app.utils.id_generator import generate_id
 
 
-async def create_session(user_id: str, title: str = "New Chat") -> dict:
+async def create_session(
+    user_id: str,
+    title: str = "New Chat",
+    llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
+) -> dict:
     """Create a new chat session."""
     db = await get_database()
+    from app.config.settings import settings
 
     now = datetime.now(timezone.utc)
+    
+    # Resolve initial default provider and model if not passed
+    provider = llm_provider or getattr(settings, "LLM_PROVIDER", "nvidia")
+    
+    if provider == "nvidia":
+        model = llm_model or getattr(settings, "NVIDIA_NIM_MODEL", "qwen/qwen3.5-122b-a10b")
+    elif provider == "xiaomi":
+        model = llm_model or getattr(settings, "XIAOMI_MODEL", "mimo-v2.5")
+    else:
+        model = llm_model or getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
+
     session_doc = {
         "id": generate_id(),
         "user_id": user_id,
         "title": title,
+        "llm_provider": provider,
+        "llm_model": model,
         "created_at": now,
         "updated_at": now,
     }
@@ -82,7 +101,16 @@ async def get_session_messages(session_id: str, limit: int = 100) -> list:
         {"session_id": session_id}, {"_id": 0}
     ).sort("created_at", 1).limit(limit)
 
-    return await cursor.to_list(length=limit)
+    messages = await cursor.to_list(length=limit)
+    for m in messages:
+        if m.get("pending_approval"):
+            action_id = m["pending_approval"].get("action_id")
+            if action_id:
+                latest = await db.pending_approvals.find_one({"action_id": action_id})
+                if latest:
+                    latest.pop("_id", None)
+                    m["pending_approval"] = latest
+    return messages
 
 
 async def add_message(
@@ -90,6 +118,7 @@ async def add_message(
     role: str,
     content: str,
     actions_taken: list[dict] | None = None,
+    pending_approval: dict | None = None,
 ) -> dict:
     """Add a message to a chat session."""
     db = await get_database()
@@ -101,6 +130,7 @@ async def add_message(
         "role": role,
         "content": content,
         "actions_taken": actions_taken or [],
+        "pending_approval": pending_approval,
         "created_at": now,
     }
 
@@ -121,5 +151,24 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> boo
     result = await db.chat_sessions.update_one(
         {"id": session_id, "user_id": user_id},
         {"$set": {"title": title, "updated_at": datetime.now(timezone.utc)}},
+    )
+    return result.matched_count > 0
+
+
+async def update_session_llm(
+    session_id: str,
+    user_id: str,
+    llm_provider: str,
+    llm_model: str,
+) -> bool:
+    """Update a session's selected provider and model."""
+    db = await get_database()
+    result = await db.chat_sessions.update_one(
+        {"id": session_id, "user_id": user_id},
+        {"$set": {
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "updated_at": datetime.now(timezone.utc)
+        }},
     )
     return result.matched_count > 0

@@ -23,9 +23,19 @@ class FirecrawlService:
         self.api_key = settings.FIRECRAWL_API_KEY
         self.base_url = "https://api.firecrawl.dev"
 
-    async def scrape_url(self, url: str, max_length: int = 4000) -> Optional[str]:
+    async def scrape_url(
+        self,
+        url: str,
+        max_length: int = 4000,
+        user_id: str | None = None,
+    ) -> Optional[str]:
         """Scrape a URL and return markdown content."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "firecrawl", self.api_key)
+
+        if not api_key:
             logger.warning("Firecrawl API key not set")
             return None
 
@@ -33,7 +43,7 @@ class FirecrawlService:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self.base_url}/v0/scrape",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                     json={
                         "url": url,
                         "formats": ["markdown"],
@@ -52,16 +62,26 @@ class FirecrawlService:
             logger.error(f"Firecrawl scrape error: {e}")
             return None
 
-    async def crawl(self, urls: list, max_depth: int = 1) -> list:
+    async def crawl(
+        self,
+        urls: list,
+        max_depth: int = 1,
+        user_id: str | None = None,
+    ) -> list:
         """Crawl multiple URLs."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "firecrawl", self.api_key)
+
+        if not api_key:
             return []
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self.base_url}/v0/crawl",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                     json={
                         "urls": urls,
                         "maxDepth": max_depth,

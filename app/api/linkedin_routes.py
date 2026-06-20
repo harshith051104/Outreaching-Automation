@@ -583,6 +583,73 @@ async def approve_action(
             {"$set": update_fields}
         )
 
+        # Trigger Lead stage hooks, timeline logging, and notifications
+        try:
+            lead = await db.leads.find_one({
+                "user_id": current_user["id"],
+                "$or": [
+                    {"linkedin": linkedin_url},
+                    {"linkedin_url": linkedin_url}
+                ]
+            })
+            if lead:
+                from app.services.linkedin_notification_service import create_linkedin_notification
+                if result.get("success"):
+                    if action_type == "connection_request":
+                        from app.services.state_machine_hooks import on_lead_stage_entered
+                        await on_lead_stage_entered(lead["id"], current_user["id"], "linkedin", "pending")
+                        
+                        await create_linkedin_notification(
+                            user_id=current_user["id"],
+                            title="Connection Request Sent",
+                            message="Connection request sent successfully",
+                            reference_id=lead["id"],
+                            type_name="linkedin_connect_sent"
+                        )
+                    elif action_type in ("first_message", "message", "followup"):
+                        from app.services.outreach_tracker_service import update_checkboxes
+                        await update_checkboxes(
+                            lead_id=lead["id"],
+                            user_id=current_user["id"],
+                            updates={"linkedin_first_message_sent": True},
+                            trigger_sync=True
+                        )
+                        
+                        await create_linkedin_notification(
+                            user_id=current_user["id"],
+                            title="Message Sent",
+                            message=f"Outreach message sent to {lead.get('name', 'lead')}",
+                            reference_id=lead["id"],
+                            type_name="linkedin_message_sent"
+                        )
+                else:
+                    if action_type == "connection_request" and result.get("reason") == "unavailable":
+                        await db.leads.update_one(
+                            {"id": lead["id"]},
+                            {"$set": {
+                                "linkedin_stage": "failed",
+                                "status": "unavailable",
+                                "updated_at": datetime.now(timezone.utc)
+                            }}
+                        )
+                        from app.services.outreach_tracker_service import log_timeline_event
+                        await log_timeline_event(
+                            lead_id=lead["id"],
+                            user_id=current_user["id"],
+                            event_type="connection_failed",
+                            description="LinkedIn Connection Failed: Connect button/option not available on profile.",
+                            metadata={"reason": result.get("error", "Connect option unavailable")}
+                        )
+                        
+                        await create_linkedin_notification(
+                            user_id=current_user["id"],
+                            title="Connection Request Failed",
+                            message=f"Could not connect with {lead.get('name', 'lead')}: Connect option not available on profile.",
+                            reference_id=lead["id"],
+                            type_name="linkedin_connect_failed"
+                        )
+        except Exception as sync_exc:
+            logger.error("Failed to sync lead stage/notify on action approval: %s", sync_exc)
 
         # Increment daily count on success
         if result.get("success") and action_type != "email":
@@ -1031,3 +1098,10 @@ async def toggle_auto_reply(
         upsert=True
     )
     return {"status": "success", "enabled": request.enabled}
+
+
+@router.get("/test/recent-actions", summary="Get recent actions")
+async def test_recent_actions():
+    db = await get_database()
+    actions = await db.linkedin_actions.find({}, {"_id": 0}).sort("created_at", -1).limit(10).to_list(length=10)
+    return actions

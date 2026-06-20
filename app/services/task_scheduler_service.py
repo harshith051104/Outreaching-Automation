@@ -18,6 +18,31 @@ from app.models.lead import Lead
 logger = logging.getLogger(__name__)
 
 
+def convert_text_to_html(text: str) -> str:
+    """Convert plain text newlines and markdown formatting to HTML."""
+    if not text:
+        return ""
+
+    import re
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    has_html = "<p>" in text.lower() or "<br" in text.lower() or "<div>" in text.lower()
+
+    if not has_html:
+        paragraphs = text.split("\n\n")
+        formatted_paragraphs = []
+        for p in paragraphs:
+            if p.strip():
+                formatted_p = p.replace("\n", "<br />")
+                formatted_paragraphs.append(f"<p>{formatted_p}</p>")
+        text = "\n".join(formatted_paragraphs)
+
+    text = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"\*(.*?)\*", r"<em>\1</em>", text)
+
+    return text
+
+
 class TaskSchedulerService:
     """Handles creating, scheduling, and executing sequence steps in an asyncio loop."""
 
@@ -195,6 +220,9 @@ class TaskSchedulerService:
         lead_name = lead.get("name", "") or lead.get("first_name", "") or ""
         subject = _format_template(subject_template, lead, lead_name, sender_name, sender_email)
         body = _format_template(body_template, lead, lead_name, sender_name, sender_email)
+        
+        # Convert plain text newlines and markdown formatting to HTML
+        body_html = convert_text_to_html(body)
 
         if gmail_id:
             tracking_id = generate_tracking_id()
@@ -204,7 +232,7 @@ class TaskSchedulerService:
                 gmail_account_id=gmail_id,
                 to=lead["email"],
                 subject=subject,
-                body_html=body,
+                body_html=body_html,
                 sequence_number=task.get("step_number") or 1
             )
             
@@ -215,6 +243,18 @@ class TaskSchedulerService:
             )
             
             await send_campaign_email(email_doc["id"])
+
+            # Auto-update tracker: email_sent milestone
+            try:
+                from app.services.outreach_tracker_service import update_checkboxes
+                await update_checkboxes(
+                    lead_id=lead["id"],
+                    user_id=task["user_id"],
+                    updates={"email_sent": True},
+                    trigger_sync=False,
+                )
+            except Exception:
+                pass
 
             await AgentMemoryService.add_email_to_memory(
                 lead_id=lead["id"],
@@ -268,6 +308,18 @@ class TaskSchedulerService:
             "created_at": datetime.now(timezone.utc)
         }
         await db.outreach.insert_one(outreach_record)
+
+        # Auto-update tracker: linkedin_connection_sent milestone
+        try:
+            from app.services.outreach_tracker_service import update_checkboxes
+            await update_checkboxes(
+                lead_id=lead["id"],
+                user_id=task["user_id"],
+                updates={"linkedin_connection_sent": True},
+                trigger_sync=False,
+            )
+        except Exception:
+            pass
 
         await AgentMemoryService.add_note_to_memory(
             lead_id=lead["id"],

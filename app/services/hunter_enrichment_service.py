@@ -23,9 +23,14 @@ class HunterEnrichmentService:
         self.api_key = settings.HUNTER_API_KEY
         self.base_url = "https://api.hunter.io/v2"
 
-    async def verify_email(self, email: str) -> Dict[str, Any]:
+    async def verify_email(self, email: str, user_id: str | None = None) -> Dict[str, Any]:
         """Verify an email address using Hunter.io."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "hunter", self.api_key)
+
+        if not api_key:
             logger.warning("Hunter API key not set")
             return {"status": "unknown", "score": 0}
 
@@ -33,7 +38,7 @@ class HunterEnrichmentService:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(
                     f"{self.base_url}/email-verifier",
-                    params={"email": email, "api_key": self.api_key},
+                    params={"email": email, "api_key": api_key},
                 )
 
                 if response.status_code == 200:
@@ -54,16 +59,21 @@ class HunterEnrichmentService:
             logger.error(f"Hunter verification error: {e}")
             return {"email": email, "status": "unknown", "score": 0}
 
-    async def domain_search(self, domain: str) -> Dict[str, Any]:
+    async def domain_search(self, domain: str, user_id: str | None = None) -> Dict[str, Any]:
         """Search for email patterns at a domain."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "hunter", self.api_key)
+
+        if not api_key:
             return {}
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(
                     f"{self.base_url}/domain-search",
-                    params={"domain": domain, "api_key": self.api_key},
+                    params={"domain": domain, "api_key": api_key},
                 )
 
                 if response.status_code == 200:

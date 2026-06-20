@@ -37,7 +37,7 @@ class PitchDeckService:
         and design/layout hints for the 10 slides, then stores them in MongoDB.
         """
         slides = await PitchDeckService._synthesize_slides_with_llm(
-            startup_name, problem, solution, market, traction, competitors, funding_ask
+            startup_name, problem, solution, market, traction, competitors, funding_ask, user_id
         )
 
         db = await get_database()
@@ -64,10 +64,9 @@ class PitchDeckService:
     @staticmethod
     async def _synthesize_slides_with_llm(
         name: str, problem: str, solution: str, market: str,
-        traction: str, competitors: str, ask: str
+        traction: str, competitors: str, ask: str, user_id: str | None = None
     ) -> List[Dict[str, Any]]:
         """Call Groq to draft professional copy, layout tips, and text for the 10 slides."""
-        from groq import Groq
         from app.config.settings import settings
 
         system_prompt = (
@@ -132,7 +131,8 @@ class PitchDeckService:
         """
 
         def _call_groq(model: str) -> str:
-            client = Groq(api_key=settings.GROQ_API_KEY)
+            from app.config.groq_config import get_groq_client
+            client = get_groq_client(user_id)
             resp = client.chat.completions.create(
                 model=model,
                 messages=[

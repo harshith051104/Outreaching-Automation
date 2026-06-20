@@ -206,6 +206,8 @@ export interface ChatSession {
   created_at: string;
   updated_at: string;
   message_count: number;
+  llm_provider?: string;
+  llm_model?: string;
 }
 
 export interface ChatMessage {
@@ -243,12 +245,16 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 export async function sendChatMessage(
   sessionId: string,
   message: string,
-  uploadedFiles?: { name: string; url: string; type: string; id: string }[]
-): Promise<{ response: string; actions_taken: { tool: string; arguments: Record<string, unknown> }[] }> {
-  const payload: { message: string; uploaded_files: { name: string; url: string }[] } = {
+  uploadedFiles?: { name: string; url: string; type: string; id: string }[],
+  llmProvider?: string,
+  llmModel?: string
+): Promise<{ response: string; actions_taken: { tool: string; arguments: Record<string, unknown> }[]; pending_approval?: any }> {
+  const payload: any = {
     message,
     uploaded_files: uploadedFiles?.map(f => ({ name: f.name, url: f.url })) || [],
   };
+  if (llmProvider) payload.llm_provider = llmProvider;
+  if (llmModel) payload.llm_model = llmModel;
   const response = await api.post(`/chatbot/sessions/${sessionId}/chat`, payload);
   return response.data;
 }

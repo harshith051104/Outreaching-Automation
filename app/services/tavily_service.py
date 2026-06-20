@@ -23,9 +23,19 @@ class TavilyService:
         self.api_key = settings.TAVILY_API_KEY
         self.base_url = "https://api.tavily.com"
 
-    async def search(self, query: str, max_results: int = 4) -> List[Dict[str, Any]]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 4,
+        user_id: str | None = None,
+    ) -> List[Dict[str, Any]]:
         """Search the web using Tavily."""
-        if not self.api_key:
+        api_key = self.api_key
+        if user_id:
+            from app.services.integrations_service import get_api_key
+            api_key = await get_api_key(user_id, "tavily", settings.TAVILY_API_KEY)
+
+        if not api_key:
             logger.warning("Tavily API key not set")
             return []
 
@@ -34,7 +44,7 @@ class TavilyService:
                 response = await client.post(
                     f"{self.base_url}/search",
                     json={
-                        "api_key": self.api_key,
+                        "api_key": api_key,
                         "query": query,
                         "max_results": max_results,
                         "include_answer": True,
@@ -58,9 +68,14 @@ class TavilyService:
             logger.error(f"Tavily search error: {e}")
             return []
 
-    async def discover_leads(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def discover_leads(
+        self,
+        query: str,
+        limit: int = 10,
+        user_id: str | None = None,
+    ) -> List[Dict[str, Any]]:
         """Discover leads from web search results."""
-        results = await self.search(query, max_results=limit)
+        results = await self.search(query, max_results=limit, user_id=user_id)
 
         leads = []
         import re
@@ -110,9 +125,13 @@ class TavilyService:
 
         return leads
 
-    async def get_company_info(self, company_name: str) -> Dict[str, Any]:
+    async def get_company_info(
+        self,
+        company_name: str,
+        user_id: str | None = None,
+    ) -> Dict[str, Any]:
         """Get company information from Tavily."""
-        results = await self.search(f"{company_name} company about", max_results=3)
+        results = await self.search(f"{company_name} company about", max_results=3, user_id=user_id)
 
         if results:
             return {

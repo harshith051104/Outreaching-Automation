@@ -57,6 +57,19 @@ async def record_open(tracking_id: str, ip: str, user_agent: str) -> None:
         from app.services.analytics_service import update_campaign_analytics
         await update_campaign_analytics(email["campaign_id"])
 
+    # Auto-update tracker checkbox: email_opened
+    if email.get("lead_id") and email.get("user_id"):
+        try:
+            from app.services.outreach_tracker_service import update_checkboxes
+            await update_checkboxes(
+                lead_id=email["lead_id"],
+                user_id=email["user_id"],
+                updates={"email_opened": True},
+                trigger_sync=False,
+            )
+        except Exception:
+            pass
+
     try:
         from app.services.webhook_service import dispatch_event
         from app.schemas.campaign_v2 import WebhookEventType
@@ -213,6 +226,19 @@ async def record_reply(tracking_id: str, reply_data: dict, gmail_thread_id: str 
     if email.get("campaign_id"):
         from app.services.analytics_service import update_campaign_analytics
         await update_campaign_analytics(email["campaign_id"])
+
+    # Auto-update tracker checkboxes: email_replied (and email_opened)
+    if email.get("lead_id") and email.get("user_id"):
+        try:
+            from app.services.outreach_tracker_service import update_checkboxes
+            await update_checkboxes(
+                lead_id=email["lead_id"],
+                user_id=email["user_id"],
+                updates={"email_replied": True, "email_opened": True},
+                trigger_sync=True,
+            )
+        except Exception:
+            pass
 
     try:
         from app.services.webhook_service import dispatch_event
