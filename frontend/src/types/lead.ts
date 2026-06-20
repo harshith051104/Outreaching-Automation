@@ -9,6 +9,7 @@ export interface Lead {
   company: string;
   website: string;
   role: string;
+  focus?: string;
   status: string;
   score: number;
   research_data: Record<string, unknown>;
@@ -24,4 +25,5 @@ export interface LeadCreate {
   company?: string;
   website?: string;
   role?: string;
+  focus?: string;
 }
