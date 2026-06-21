@@ -14,7 +14,7 @@ export interface ApprovalAction {
 
 interface Props {
   action: ApprovalAction;
-  onDecision: (actionId: string, decision: "approve" | "reject") => void;
+  onDecision: (actionId: string, decision: "approve" | "reject", resultData?: any) => void;
 }
 
 const ACTION_ICONS: Record<string, string> = {
@@ -79,7 +79,7 @@ export default function ApprovalCard({ action: initialAction, onDecision }: Prop
               ? `✅ Approved! ${res.data?.result?.executed ?? ""} actions executed.`
               : "❌ Action rejected.",
         });
-        onDecision(action.action_id, decision);
+        onDecision(action.action_id, decision, res.data);
       }
     } catch (err: any) {
       setResult({

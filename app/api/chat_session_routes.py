@@ -168,3 +168,44 @@ async def chat_in_session(
     )
 
     return result
+
+
+class InjectApprovalRequest(BaseModel):
+    action_id: str
+
+
+@router.post("/sessions/{session_id}/inject-approval", summary="Inject an approval into session")
+async def inject_approval(
+    session_id: str,
+    data: InjectApprovalRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Inject a background-generated pending approval into the active chat session."""
+    session = await get_session(session_id, current_user["id"])
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+        
+    from app.config.mongodb_config import get_database
+    db = await get_database()
+    app_doc = await db.pending_approvals.find_one({"action_id": data.action_id, "user_id": current_user["id"]})
+    
+    if not app_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending approval not found",
+        )
+    
+    app_doc.pop("_id", None)
+    
+    msg = await add_message(
+        session_id=session_id,
+        role="assistant",
+        content="I have generated a new draft for your approval:",
+        actions_taken=[],
+        pending_approval=app_doc,
+    )
+    
+    return msg

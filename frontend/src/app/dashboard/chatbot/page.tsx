@@ -204,29 +204,60 @@ export default function ChatbotPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   const fetchPendingApprovals = async () => {
     try {
       const response = await api.get("/chatbot/approvals");
       if (response.status === 200) {
-        setPendingApprovals(response.data);
+        const data = response.data;
+        setPendingApprovals(data);
+        
+        // Auto-inject new approvals into the active chat session
+        const currentSessionId = activeSessionIdRef.current;
+        if (currentSessionId) {
+          setMessages((currentMessages) => {
+            const existingIds = new Set(currentMessages.map(m => m.pendingApproval?.action_id).filter(Boolean));
+            const newApprovals = data.filter((app: ApprovalAction) => !existingIds.has(app.action_id));
+            
+            if (newApprovals.length > 0) {
+              let updatedMessages = [...currentMessages];
+              newApprovals.forEach((app: ApprovalAction) => {
+                api.post(`/chatbot/sessions/${currentSessionId}/inject-approval`, { action_id: app.action_id })
+                  .catch(console.error);
+                
+                updatedMessages.push({
+                  role: "assistant",
+                  content: "I have generated a new draft for your approval:",
+                  pendingApproval: app,
+                });
+              });
+              return updatedMessages;
+            }
+            return currentMessages;
+          });
+        }
       }
     } catch (err) {
       console.error("Failed to fetch pending approvals:", err);
     }
   };
 
-  const handleApprovalDecision = (actionId: string, decision: "approve" | "reject") => {
+  const handleApprovalDecision = async (actionId: string, decision: "approve" | "reject", resultData?: any) => {
     // Remove from the polled list
     setPendingApprovals((prev) => prev.filter((app) => app.action_id !== actionId));
-    // Also remove from any inline messages to avoid duplication
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.pendingApproval?.action_id === actionId
-          ? { ...m, pendingApproval: null }
-          : m
-      )
-    );
+    
+    if (decision === "approve") {
+      const prompt = `[System: The user approved the pending action (ID: ${actionId}). The backend execution was successful. Please acknowledge this completion to the user.]`;
+      await executeMessage(prompt);
+    } else if (decision === "reject") {
+      const prompt = `[System: The user rejected the pending action (ID: ${actionId}). Please acknowledge the cancellation.]`;
+      await executeMessage(prompt);
+    }
   };
 
   // Auto-grow textarea height on input change
@@ -786,7 +817,7 @@ export default function ChatbotPage() {
                   </div>
                 </div>
               )}
-              {messages.map((msg, index) => (
+              {messages.filter(msg => !msg.content.startsWith("[System:")).map((msg, index) => (
                 <div
                   key={index}
                   className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-fadeIn`}
