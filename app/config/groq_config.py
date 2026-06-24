@@ -299,7 +299,7 @@ def openai_compatible_inference(
             f"{base_url.rstrip('/')}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=60.0
+            timeout=120.0
         )
         response.raise_for_status()
         data = response.json()

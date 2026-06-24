@@ -1869,6 +1869,9 @@ CHATBOT_TOOLS = [
 
 async def run_rule_based_fallback(user_id: str, message: str, background_tasks = None) -> Dict[str, Any] | None:
     """Parse message with regex and run automation. Used when Groq is unavailable."""
+    if len(message) > 200000:
+        return None
+
     db = await get_database()
     msg_lower = message.lower()
 
@@ -1884,7 +1887,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
     # 1. Create Campaign
     create_match = re.search(
-        r"create\s+(?:a\s+)?(?:new\s+)?campaign\s+(?:named|called)?\s*['\"]?([^'\"]+?)['\"]?(?:\s+with|\s+subject|\.|\s*$)",
+        r"create\s+(?:a\s+)?(?:new\s+)?campaign\s+(?:named|called)?\s*['\"]?([\w\s\-\.]+?)['\"]?(?:\s+with|\s+subject|\.|\s*$)",
         message, re.IGNORECASE
     )
     if create_match:
@@ -1906,7 +1909,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         }
 
     # 2. Start Campaign
-    start_match = re.search(r"start\s+(?:the\s+)?(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?(?:\.|\s*$)", message, re.IGNORECASE)
+    start_match = re.search(r"start\s+(?:the\s+)?(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?(?:\.|\s*$)", message, re.IGNORECASE)
     if start_match:
         identifier = start_match.group(1).strip()
         # If identifier is empty or just "campaign", find the most recent draft/paused
@@ -1928,7 +1931,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         return {"response": f"Campaign **{identifier}** started.", "actions_taken": [{"tool": "start_campaign", "arguments": {"campaign_id": campaign_id}}]}
 
     # 3. Pause Campaign
-    pause_match = re.search(r"pause\s+(?:the\s+)?(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?(?:\.|\s*$)", message, re.IGNORECASE)
+    pause_match = re.search(r"pause\s+(?:the\s+)?(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?(?:\.|\s*$)", message, re.IGNORECASE)
     if pause_match:
         identifier = pause_match.group(1).strip()
         # If identifier is empty or just "campaign", find the most recent active
@@ -1962,7 +1965,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
     # 5. Add Lead
     add_match = re.search(
-        r"add\s+(?:a\s+)?lead\s+['\"]?([^,'\"]+?)['\"]?,\s*['\"]?([^'\"]+\@[^'\"]+\.[^'\"]+?)['\"]?\s+to\s+(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?(?:\.|\s*$)",
+        r"add\s+(?:a\s+)?lead\s+['\"]?([^,'\"]+?)['\"]?,\s*['\"]?([^'\"]+\@[^'\"]+\.[^'\"]+?)['\"]?\s+to\s+(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?(?:\.|\s*$)",
         message, re.IGNORECASE
     )
     if add_match:
@@ -1977,7 +1980,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         return {"response": f"Added lead **{name}** ({email}).", "actions_taken": [{"tool": "add_lead", "arguments": args}]}
 
     # 6. List Leads
-    list_leads_match = re.search(r"(?:list|show|get|display)\s+leads?(?:\s+(?:for|in)\s+(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?)?", message, re.IGNORECASE)
+    list_leads_match = re.search(r"(?:list|show|get|display)\s+leads?(?:\s+(?:for|in)\s+(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?)?", message, re.IGNORECASE)
     if list_leads_match:
         campaign_id = None
         campaign_name = "all campaigns"
@@ -2007,7 +2010,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         return {"response": formatted, "actions_taken": [{"tool": "list_tracker_users", "arguments": {}}]}
 
     # 7. Analytics
-    analytics_match = re.search(r"(?:analytics|stats|statistics|metrics)\s+(?:for|of)?\s*(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?", message, re.IGNORECASE)
+    analytics_match = re.search(r"(?:analytics|stats|statistics|metrics)\s+(?:for|of)?\s*(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?", message, re.IGNORECASE)
     if analytics_match:
         identifier = analytics_match.group(1).strip()
         campaign_id = await resolve_campaign(identifier)
@@ -2029,7 +2032,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
     # 8. Update Campaign
     update_campaign_match = re.search(
-        r"update\s+(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?\s+(?:to\s+)?(?:named|called)?\s*(?:name\s+)?(?:to\s+)?['\"]?([^'\"]+?)['\"]?(?:\.|\s*$)",
+        r"update\s+(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?\s+(?:to\s+)?(?:named|called)?\s*(?:name\s+)?(?:to\s+)?['\"]?([\w\s\-\.]+?)['\"]?(?:\.|\s*$)",
         message, re.IGNORECASE
     )
     if update_campaign_match:
@@ -2044,9 +2047,10 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
     # 9. Rename Campaign (simpler pattern)
     rename_match = re.search(
-        r"rename\s+(?:campaign\s+)?['\"]?([^'\"]+?)['\"]?\s+(?:to|as)\s+['\"]?([^'\"]+?)['\"]?(?:\.|\s*$)",
+        r"rename\s+(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?\s+(?:to|as)\s+['\"]?([\w\s\-\.]+?)['\"]?(?:\.|\s*$)",
         message, re.IGNORECASE
     )
+
     if rename_match:
         identifier = rename_match.group(1).strip()
         new_name = rename_match.group(2).strip()
