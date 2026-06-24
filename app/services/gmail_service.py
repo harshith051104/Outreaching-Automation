@@ -158,11 +158,18 @@ async def get_auth_url(user_id: str) -> tuple:
         state=session_id,  # Pass our session_id as the state to Google
     )
 
+    # Extract the code_verifier generated for PKCE
+    code_verifier = getattr(flow, "code_verifier", None)
+
     # Store user_id keyed by the session_id in MongoDB
     db = await get_database()
     await db.oauth_sessions.update_one(
         {"state": session_id},
-        {"$set": {"user_id": user_id, "created_at": datetime.now(timezone.utc)}},
+        {"$set": {
+            "user_id": user_id, 
+            "code_verifier": code_verifier,
+            "created_at": datetime.now(timezone.utc)
+        }},
         upsert=True
     )
     logger.info("OAuth session created for user %s with state %s", user_id, session_id)
@@ -190,6 +197,12 @@ async def handle_callback(code: str, state: str | None) -> dict:
 
     # Rebuild the flow for token exchange (no need to store the flow object)
     flow = _build_flow(state=state)
+    
+    # Restore the code_verifier for PKCE if it exists
+    code_verifier = session.get("code_verifier")
+    if code_verifier:
+        flow.code_verifier = code_verifier
+        
     flow.fetch_token(code=code)
     credentials = flow.credentials
 
