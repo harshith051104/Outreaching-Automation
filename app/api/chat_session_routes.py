@@ -157,6 +157,7 @@ async def chat_in_session(
         background_tasks=background_tasks,
         llm_provider=provider,
         llm_model=model,
+        chat_session_id=session_id,
     )
 
     await add_message(

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suggestion } from "@/services/suggestion-api";
-import { MessageSquare, Laptop, Image, Clock, CheckCircle2, AlertTriangle, EyeOff } from "lucide-react";
+import { MessageSquare, Laptop, Clock, CheckCircle2, AlertTriangle, EyeOff } from "lucide-react";
 
 interface SuggestionMetricsProps {
   suggestions: Suggestion[];
@@ -10,7 +10,6 @@ interface SuggestionMetricsProps {
 export default function SuggestionMetrics({ suggestions }: SuggestionMetricsProps) {
   const total = suggestions.length;
   const widget = suggestions.filter((s) => s.submitted_from === "widget").length;
-  const screenshots = suggestions.filter((s) => s.has_screenshot).length;
   
   const pending = suggestions.filter((s) => s.status === "pending").length;
   const underReview = suggestions.filter((s) => s.status === "under_review").length;
@@ -25,14 +24,6 @@ export default function SuggestionMetrics({ suggestions }: SuggestionMetricsProp
       icon: MessageSquare,
       color: "from-blue-600 to-indigo-600",
       iconColor: "text-blue-400",
-    },
-    {
-      title: "Screenshots",
-      value: screenshots,
-      desc: "Interactive visual logs",
-      icon: Image,
-      color: "from-pink-600 to-rose-600",
-      iconColor: "text-pink-400",
     },
     {
       title: "In Review Progress",

@@ -193,7 +193,7 @@ async def _generate_ai_reply_message(user_id: str, lead: dict, conv: dict, outbo
         return f"Hi {lead_name}, thank you for your response. I'd love to learn more about your current initiatives."
 
 
-async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list = None, background_tasks = None) -> str:
+async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list = None, background_tasks = None, chat_session_id: str = None) -> str:
     """Execute the corresponding tool function and return output as a string."""
     db = await get_database()
     _uploaded_files = uploaded_files or []
@@ -549,6 +549,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                             "linkedin_url": linkedin_url
                         },
                         "status": "pending",
+                        "chat_session_id": chat_session_id,
                         "created_at": datetime.now(timezone.utc),
                         "updated_at": datetime.now(timezone.utc),
                     }
@@ -632,6 +633,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                         "linkedin_url": linkedin_url
                     },
                     "status": "pending",
+                    "chat_session_id": chat_session_id,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                 }
@@ -681,6 +683,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                         "message": msg
                     },
                     "status": "pending",
+                    "chat_session_id": chat_session_id,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                 }
@@ -807,6 +810,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                         "linkedin_url": linkedin_url
                     },
                     "status": "pending",
+                    "chat_session_id": chat_session_id,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                 }
@@ -1065,6 +1069,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     "linkedin_url": linkedin_url
                 },
                 "status": "pending",
+                "chat_session_id": chat_session_id,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -1155,6 +1160,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     "linkedin_url": linkedin_url
                 },
                 "status": "pending",
+                "chat_session_id": chat_session_id,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -1223,6 +1229,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     "is_bulk": True
                 },
                 "status": "pending",
+                "chat_session_id": chat_session_id,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -2427,6 +2434,7 @@ async def handle_chatbot_chat(
     background_tasks = None,
     llm_provider: str = None,
     llm_model: str = None,
+    chat_session_id: str = None,
 ) -> Dict[str, Any]:
     """
     Process chatbot message with tool calling. Falls back to rule-based parser if needed.
@@ -2649,7 +2657,7 @@ async def handle_chatbot_chat(
             tool_name = tool_call.function.name
             tool_args = json.loads(tool_call.function.arguments)
             actions_taken.append({"tool": tool_name, "arguments": tool_args})
-            tool_output = await execute_tool(name=tool_name, args=tool_args, user_id=user_id, uploaded_files=_current_uploaded_files, background_tasks=background_tasks)
+            tool_output = await execute_tool(name=tool_name, args=tool_args, user_id=user_id, uploaded_files=_current_uploaded_files, background_tasks=background_tasks, chat_session_id=chat_session_id)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,

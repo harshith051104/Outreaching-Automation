@@ -21,6 +21,11 @@ export const getCampaignInsights = async (id: string): Promise<{ insights: strin
   return response.data;
 };
 
+export const getGlobalAiInsights = async (): Promise<any> => {
+  const response = await api.get("/analytics/ai-insights");
+  return response.data;
+};
+
 export const exportDashboardToSheets = async (): Promise<{ success: boolean; spreadsheet_url: string; title: string }> => {
   const response = await api.post<{ success: boolean; spreadsheet_url: string; title: string }>(
     "/analytics/dashboard/export/sheets",

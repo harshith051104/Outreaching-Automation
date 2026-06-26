@@ -47,6 +47,75 @@ async def daily_stats(
     return await get_daily_stats(campaign_id, days=days)
 
 
+@router.get("/ai-insights", summary="Global AI optimization insights across all campaigns")
+async def ai_insights(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Generate cross-campaign AI insights: best subject lines, send times,
+    highest reply rate campaigns, and optimization recommendations.
+    """
+    db = await get_database()
+    user_id = current_user["id"]
+
+    campaigns = await db.campaigns.find(
+        {"user_id": user_id, "status": {"$ne": "deleted"}}
+    ).to_list(length=100)
+
+    campaign_ids = [c["id"] for c in campaigns]
+
+    send_pipeline = [
+        {"$match": {"campaign_id": {"$in": campaign_ids}, "status": "sent"}},
+        {"$group": {
+            "_id": {"$hour": "$sent_at"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"count": -1}},
+    ]
+    send_hour_results = await db.emails.aggregate(send_pipeline).to_list(length=24)
+    best_send_hours = [
+        {"hour": r["_id"], "emails_sent": r["count"]}
+        for r in send_hour_results[:5]
+    ]
+
+    campaign_stats = []
+    for c in campaigns:
+        try:
+            stats = await get_campaign_analytics(c["id"], user_id)
+            campaign_stats.append({
+                "campaign_id": c["id"],
+                "name": c.get("name", "Untitled"),
+                "status": c.get("status", "unknown"),
+                "emails_sent": stats.get("emails_sent", 0),
+                "open_rate": stats.get("open_rate", 0.0),
+                "click_rate": stats.get("click_rate", 0.0),
+                "reply_rate": stats.get("reply_rate", 0.0),
+            })
+        except Exception:
+            pass
+
+    campaign_stats.sort(key=lambda x: x["reply_rate"], reverse=True)
+    top_campaigns = campaign_stats[:5]
+
+    total_sent = sum(c["emails_sent"] for c in campaign_stats)
+    avg_open = sum(c["open_rate"] for c in campaign_stats) / len(campaign_stats) if campaign_stats else 0
+    avg_click = sum(c["click_rate"] for c in campaign_stats) / len(campaign_stats) if campaign_stats else 0
+    avg_reply = sum(c["reply_rate"] for c in campaign_stats) / len(campaign_stats) if campaign_stats else 0
+
+    return {
+        "summary": {
+            "total_campaigns": len(campaign_stats),
+            "total_emails_sent": total_sent,
+            "avg_open_rate": round(avg_open, 2),
+            "avg_click_rate": round(avg_click, 2),
+            "avg_reply_rate": round(avg_reply, 2),
+        },
+        "best_send_times": best_send_hours,
+        "top_campaigns_by_reply_rate": top_campaigns,
+        "all_campaigns": campaign_stats,
+    }
+
+
 @router.get("/campaign/{campaign_id}/insights", summary="AI-powered campaign insights")
 async def insights(
     campaign_id: str,

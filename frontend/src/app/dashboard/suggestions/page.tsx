@@ -51,7 +51,6 @@ export default function SuggestionsPage() {
   const [activeCategory, setActiveCategory] = useState("");
   const [activeStatus, setActiveStatus] = useState("");
   const [activeSubmittedFrom, setActiveSubmittedFrom] = useState("");
-  const [activeHasScreenshot, setActiveHasScreenshot] = useState<boolean | undefined>(undefined);
   const [activeAnonymous, setActiveAnonymous] = useState<boolean | undefined>(undefined);
 
   // Submit Feedback Form State
@@ -64,7 +63,7 @@ export default function SuggestionsPage() {
 
   useEffect(() => {
     fetchSuggestionsList();
-  }, [activeCategory, activeStatus, activeSubmittedFrom, activeHasScreenshot, activeAnonymous]);
+  }, [activeCategory, activeStatus, activeSubmittedFrom, activeAnonymous]);
 
   // Handle custom suggestion submission event for auto-refresh
   useEffect(() => {
@@ -88,7 +87,6 @@ export default function SuggestionsPage() {
         category: activeCategory || undefined,
         status: activeStatus || undefined,
         submitted_from: activeSubmittedFrom || undefined,
-        has_screenshot: activeHasScreenshot,
         anonymous: activeAnonymous,
       });
       setSuggestions(data);
@@ -334,16 +332,6 @@ export default function SuggestionsPage() {
             Widget Submissions
           </button>
           <button
-            onClick={() => setActiveHasScreenshot(activeHasScreenshot === true ? undefined : true)}
-            className={`px-3 py-1 rounded-full border transition-all cursor-pointer font-bold uppercase tracking-wider text-[9px] ${
-              activeHasScreenshot === true
-                ? "bg-pink-650 text-white border-pink-500"
-                : "bg-slate-800/40 text-slate-400 border-slate-700/60 hover:text-slate-200"
-            }`}
-          >
-            With Screenshots
-          </button>
-          <button
             onClick={() => setActiveAnonymous(activeAnonymous === true ? undefined : true)}
             className={`px-3 py-1 rounded-full border transition-all cursor-pointer font-bold uppercase tracking-wider text-[9px] ${
               activeAnonymous === true
@@ -403,17 +391,12 @@ export default function SuggestionsPage() {
                     </span>
                   </div>
 
-                  {/* Context and Screenshot Tags */}
-                  {(sug.submitted_from === "widget" || sug.has_screenshot || sug.ai_priority === "high" || sug.ai_priority === "critical") && (
+                  {/* Context Tags */}
+                  {(sug.submitted_from === "widget" || sug.ai_priority === "high" || sug.ai_priority === "critical") && (
                     <div className="flex flex-wrap gap-1.5 pt-0.5 animate-in fade-in duration-200">
                       {sug.submitted_from === "widget" && (
                         <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-indigo-950/40 text-indigo-400 border border-indigo-500/20 uppercase tracking-widest">
                           Widget
-                        </span>
-                      )}
-                      {sug.has_screenshot && (
-                        <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-pink-950/40 text-pink-400 border border-pink-500/20 uppercase tracking-widest">
-                          Screenshot
                         </span>
                       )}
                       {(sug.ai_priority === "high" || sug.ai_priority === "critical") && (

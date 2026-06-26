@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.auth.dependencies import get_current_user
 from app.config.mongodb_config import get_database
 from app.models.task import Task
-from app.models.notification import Notification
+from app.services.notification_service import notify
 from app.models.activity_log import ActivityLog
 from app.schemas.task_tracker import TaskCreate, TaskUpdate, TaskResponse
 
@@ -77,16 +77,15 @@ async def create(
 
     # Notification for Assignee
     if task_obj.assigned_to and task_obj.assigned_to != current_user["id"]:
-        notification = Notification(
+        await notify(
             user_id=task_obj.assigned_to,
-            sender_id=current_user["id"],
             type="task_assigned",
             title="New Task Assigned",
             message=f"You have been assigned to: '{task_obj.title}' by {current_user['name']}.",
             reference_id=task_obj.id,
             reference_type="task",
+            sender_id=current_user["id"],
         )
-        await db.notifications.insert_one(notification.to_dict())
 
     # Format response
     creator_info = await _populate_user_info(task_obj.user_id)
@@ -219,31 +218,29 @@ async def update(
         
         # Notify creator if completed by assignee
         if task_model.status == "completed" and task_model.user_id != current_user["id"]:
-            notification = Notification(
+            await notify(
                 user_id=task_model.user_id,
-                sender_id=current_user["id"],
                 type="task_completed",
                 title="Task Completed",
                 message=f"Task '{task_model.title}' has been completed by {current_user['name']}.",
                 reference_id=task_model.id,
                 reference_type="task",
+                sender_id=current_user["id"],
             )
-            await db.notifications.insert_one(notification.to_dict())
 
     if old_assignee != task_model.assigned_to:
         activity_details.append("reassigned task")
         # Notify new assignee
         if task_model.assigned_to and task_model.assigned_to != current_user["id"]:
-            notification = Notification(
+            await notify(
                 user_id=task_model.assigned_to,
-                sender_id=current_user["id"],
                 type="task_assigned",
                 title="New Task Assigned",
                 message=f"You have been assigned to: '{task_model.title}' by {current_user['name']}.",
                 reference_id=task_model.id,
                 reference_type="task",
+                sender_id=current_user["id"],
             )
-            await db.notifications.insert_one(notification.to_dict())
 
     if not activity_details:
         activity_details.append("updated task properties")

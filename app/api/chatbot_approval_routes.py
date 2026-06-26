@@ -35,6 +35,7 @@ class PendingApprovalResponse(BaseModel):
     count: int = 0
     items: list[str] = []
     status: str
+    chat_session_id: str | None = None
     created_at: Any
 
 
@@ -49,11 +50,20 @@ async def _get_approval(db, action_id: str, user_id: str) -> dict:
 
 
 @router.get("", response_model=list[PendingApprovalResponse])
-async def list_pending_approvals(current_user: dict = Depends(get_current_user)):
-    """List all pending approval actions for the current user."""
+async def list_pending_approvals(
+    chat_session_id: str | None = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """List pending approval actions for the current user, optionally scoped to a chat session."""
     db = await get_database()
+    query: dict[str, Any] = {"user_id": current_user["id"], "status": "pending"}
+
+    # Scope to a specific chat session if provided — prevents approvals appearing in other tabs
+    if chat_session_id:
+        query["chat_session_id"] = chat_session_id
+
     docs = await db.pending_approvals.find(
-        {"user_id": current_user["id"], "status": "pending"}
+        query
     ).sort("created_at", -1).limit(20).to_list(length=20)
 
     result = []
@@ -231,6 +241,7 @@ async def create_pending_approval(
         "items": body.get("items", [])[:50],  # Store first 50 items for preview
         "payload": body.get("payload", {}),
         "status": "pending",
+        "chat_session_id": body.get("chat_session_id"),
         "created_at": now,
         "updated_at": now,
     }
