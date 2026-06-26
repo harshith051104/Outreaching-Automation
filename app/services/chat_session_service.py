@@ -29,7 +29,7 @@ async def create_session(
     provider = llm_provider or getattr(settings, "LLM_PROVIDER", "nvidia")
     
     if provider == "nvidia":
-        model = llm_model or getattr(settings, "NVIDIA_NIM_MODEL", "qwen/qwen3.5-122b-a10b")
+        model = llm_model or getattr(settings, "NVIDIA_NIM_MODEL", "moonshotai/kimi-k2.6")
     elif provider == "xiaomi":
         model = llm_model or getattr(settings, "XIAOMI_MODEL", "mimo-v2.5")
     else:

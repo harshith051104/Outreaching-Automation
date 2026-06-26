@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     LLM_PROVIDER: str = "nvidia"
     NVIDIA_NIM_API_KEY: str = ""
-    NVIDIA_NIM_MODEL: str = "qwen/qwen3.5-122b-a10b"
+    NVIDIA_NIM_MODEL: str = "moonshotai/kimi-k2.6"
 
     XIAOMI_API_KEY: str = ""
     XIAOMI_MODEL: str = "mimo-v2.5"

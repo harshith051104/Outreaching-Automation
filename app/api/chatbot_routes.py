@@ -72,9 +72,8 @@ async def get_available_models():
             "default_model": settings.GROQ_MODEL or "llama-3.3-70b-versatile",
             "models": [
                 {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B Versatile"},
-                {"id": "llama3-70b-8192", "name": "Llama 3 70B (8192)"},
-                {"id": "llama3-8b-8192", "name": "Llama 3 8B (8192)"},
-                {"id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B"}
+                {"id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B Instant"},
+                {"id": "llama3-8b-8192", "name": "Llama 3 8B (8192)"}
             ]
         }
         
@@ -82,10 +81,10 @@ async def get_available_models():
     if settings.NVIDIA_NIM_API_KEY and settings.NVIDIA_NIM_API_KEY.strip() not in ("", "None", '""', "''"):
         providers["nvidia"] = {
             "name": "Nvidia NIM",
-            "default_model": settings.NVIDIA_NIM_MODEL or "qwen/qwen3.5-122b-a10b",
+            "default_model": settings.NVIDIA_NIM_MODEL or "moonshotai/kimi-k2.6",
             "models": [
-                {"id": "qwen/qwen3.5-122b-a10b", "name": "Qwen 3.5 122B (NIM)"},
-                {"id": "meta/llama-3.1-70b-instruct", "name": "Llama 3.1 70B Instruct (NIM)"},
+                {"id": "moonshotai/kimi-k2.6", "name": "Kimi K2.6 (NIM)"},
+                {"id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "Nemotron 3 Ultra 550B (NIM)"},
                 {"id": "meta/llama-3.3-70b-instruct", "name": "Llama 3.3 70B Instruct (NIM)"},
                 {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1 (NIM)"}
             ]

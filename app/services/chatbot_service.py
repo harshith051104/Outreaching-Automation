@@ -134,7 +134,7 @@ async def _generate_ai_outreach_message(user_id: str, lead: dict) -> str:
     
     try:
         client = get_groq_client(user_id)
-        model = getattr(settings, "GROQ_MODEL", "llama3-70b-8192")
+        model = getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
         resp = client.chat.completions.create(
             model=model,
             messages=[
@@ -177,7 +177,7 @@ async def _generate_ai_reply_message(user_id: str, lead: dict, conv: dict, outbo
     
     try:
         client = get_groq_client(user_id)
-        model = getattr(settings, "GROQ_MODEL", "llama3-70b-8192")
+        model = getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
         resp = client.chat.completions.create(
             model=model,
             messages=[
@@ -2487,7 +2487,7 @@ async def handle_chatbot_chat(
 
     active_provider = (llm_provider or getattr(settings, "LLM_PROVIDER", "nvidia")).lower()
     if active_provider == "nvidia":
-        active_model = llm_model or getattr(settings, "NVIDIA_NIM_MODEL", "qwen/qwen3.5-122b-a10b")
+        active_model = llm_model or getattr(settings, "NVIDIA_NIM_MODEL", "moonshotai/kimi-k2.6")
         api_key = db_api_key or settings.NVIDIA_NIM_API_KEY
     elif active_provider == "xiaomi":
         active_model = llm_model or getattr(settings, "XIAOMI_MODEL", "mimo-v2.5")

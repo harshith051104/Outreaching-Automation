@@ -199,7 +199,7 @@ export default function ChatbotPage() {
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalAction[]>([]);
 
   const [llmProvider, setLlmProvider] = useState<string>("nvidia");
-  const [llmModel, setLlmModel] = useState<string>("qwen/qwen3.5-122b-a10b");
+  const [llmModel, setLlmModel] = useState<string>("moonshotai/kimi-k2.6");
   const [modelsData, setModelsData] = useState<any>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -754,8 +754,8 @@ export default function ChatbotPage() {
                 ) : (
                   llmProvider === "nvidia" ? (
                     <>
-                      <option value="qwen/qwen3.5-122b-a10b">Qwen 3.5 122B (NIM)</option>
-                      <option value="meta/llama-3.1-70b-instruct">Llama 3.1 70B (NIM)</option>
+                      <option value="moonshotai/kimi-k2.6">Kimi K2.6 (NIM)</option>
+                      <option value="nvidia/nemotron-3-ultra-550b-a55b">Nemotron 3 Ultra 550B (NIM)</option>
                       <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B (NIM)</option>
                       <option value="deepseek/deepseek-r1">DeepSeek R1 (NIM)</option>
                     </>
@@ -767,9 +767,8 @@ export default function ChatbotPage() {
                   ) : (
                     <>
                       <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
-                      <option value="llama3-70b-8192">Llama 3 70B (8192)</option>
+                      <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
                       <option value="llama3-8b-8192">Llama 3 8B (8192)</option>
-                      <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
                     </>
                   )
                 )}

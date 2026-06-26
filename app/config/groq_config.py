@@ -199,7 +199,7 @@ def groq_inference(
     if provider == "nvidia":
         from app.services.integrations_service import get_api_key_sync
         api_key = get_api_key_sync(user_id, "nvidia", settings.NVIDIA_NIM_API_KEY)
-        model_name = model or settings.NVIDIA_NIM_MODEL or "qwen/qwen3.5-122b-a10b"
+        model_name = model or settings.NVIDIA_NIM_MODEL or "moonshotai/kimi-k2.6"
         completion = openai_compatible_inference(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=api_key,
@@ -360,7 +360,7 @@ def llm_chat_completion(
     if active_provider == "nvidia":
         from app.services.integrations_service import get_api_key_sync
         api_key = get_api_key_sync(user_id, "nvidia", settings.NVIDIA_NIM_API_KEY)
-        model_name = model or settings.NVIDIA_NIM_MODEL or "qwen/qwen3.5-122b-a10b"
+        model_name = model or settings.NVIDIA_NIM_MODEL or "moonshotai/kimi-k2.6"
         return openai_compatible_inference(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=api_key,
