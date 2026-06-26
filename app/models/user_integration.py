@@ -61,6 +61,8 @@ PROVIDER_LABELS: dict[str, str] = {
     "linkedin_session": "LinkedIn",
     "google_sheets": "Google Sheets",
     "gmail_oauth": "Gmail",
+    "google_oauth_credentials": "Google OAuth Credentials",
+    "qdrant": "Qdrant",
 }
 
 # Fields expected for each provider (used for validation and UI hints)
@@ -75,4 +77,6 @@ PROVIDER_FIELDS: dict[str, list[str]] = {
     "linkedin_session": ["cookie"],    # Playwright cookie JSON
     "google_sheets": ["spreadsheet_id", "service_account_json"],
     "gmail_oauth": [],                 # Managed via OAuth flow, not manual entry
+    "google_oauth_credentials": ["client_id", "client_secret"],
+    "qdrant": ["url", "api_key"],
 }

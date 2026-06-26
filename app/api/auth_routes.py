@@ -1,7 +1,7 @@
 """
 Authentication API routes.
 
-Provides register, login, and current-user endpoints.
+Provides register, login, current-user, and user-listing endpoints.
 """
 
 from fastapi import APIRouter, Depends, status
@@ -58,3 +58,32 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     Requires a valid JWT in the Authorization header.
     """
     return UserResponse(**current_user)
+
+
+@router.get(
+    "/users",
+    response_model=list,
+    summary="List all registered users",
+)
+async def list_users(current_user: dict = Depends(get_current_user)):
+    """
+    Return all registered users (id, name, email, role, display_name).
+
+    Used by Task Hub Assign-To dropdown and notification targeting.
+    """
+    from app.config.mongodb_config import get_database
+    db = await get_database()
+    cursor = db.users.find(
+        {},
+        {
+            "_id": 0,
+            "id": 1,
+            "name": 1,
+            "display_name": 1,
+            "email": 1,
+            "role": 1,
+            "avatar_url": 1,
+        },
+    ).sort("name", 1)
+    users = await cursor.to_list(length=200)
+    return users

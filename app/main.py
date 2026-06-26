@@ -125,6 +125,73 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to run scheduled tasks expedition migration: {exc}")
 
+    # Run database migration: backfill scheduled tasks for contacted leads in active campaigns with sequence steps
+    try:
+        from app.config.mongodb_config import get_database
+        from uuid import uuid4
+        from datetime import datetime, timedelta, timezone
+        db = await get_database()
+        
+        # Find all active campaigns with sequence_steps
+        active_seq_campaigns = await db.campaigns.find({
+            "status": "active",
+            "sequence_steps": {"$exists": True, "$ne": None, "$not": {"$size": 0}}
+        }).to_list(length=100)
+        
+        for campaign in active_seq_campaigns:
+            leads = await db.leads.find({
+                "campaign_id": campaign["id"],
+                "status": "contacted"
+            }).to_list(length=1000)
+            
+            for lead in leads:
+                # Check if tasks already exist for this lead
+                existing_tasks = await db.scheduled_tasks.count_documents({"lead_id": lead["id"]})
+                if existing_tasks == 0:
+                    # Find initial email sent to this lead to determine base time
+                    initial_email = await db.emails.find_one({
+                        "lead_id": lead["id"],
+                        "campaign_id": campaign["id"],
+                        "sequence_number": 1
+                    })
+                    
+                    base_time = datetime.now(timezone.utc)
+                    if initial_email:
+                        base_time = initial_email.get("sent_at") or initial_email.get("created_at") or base_time
+                        
+                    logger.info("Database Migration: Backfilling sequence tasks for lead %s (base time: %s)", lead["id"], base_time)
+                    
+                    for step in campaign["sequence_steps"]:
+                        step_num = step.get("step_number") or 1
+                        delay_days = step.get("delay_days") or 0
+                        channel = step.get("channel", "email").lower()
+                        
+                        scheduled_time = base_time + timedelta(days=delay_days)
+                        status = "executed" if step_num == 1 and initial_email else "pending"
+                        executed_at = base_time if status == "executed" else None
+                        
+                        task_doc = {
+                            "id": str(uuid4()),
+                            "lead_id": lead["id"],
+                            "campaign_id": campaign["id"],
+                            "user_id": campaign["user_id"],
+                            "step_number": step_num,
+                            "channel": channel,
+                            "status": status,
+                            "scheduled_at": scheduled_time,
+                            "executed_at": executed_at,
+                            "data": {
+                                "subject_template": step.get("subject_template", ""),
+                                "body_template": step.get("body_template", ""),
+                                "notes": step.get("notes", "")
+                            },
+                            "created_at": datetime.now(timezone.utc),
+                            "updated_at": datetime.now(timezone.utc)
+                        }
+                        await db.scheduled_tasks.insert_one(task_doc)
+    except Exception as exc:
+        logger.error(f"Failed to run backfill sequence tasks migration: {exc}")
+
     try:
         from app.services.qdrant_service import ensure_all_collections
         ensure_all_collections()
@@ -261,16 +328,20 @@ async def _campaign_processor_loop():
 
                     for lead in pending_leads:
                         lead_id = lead.get("id") or str(lead["_id"])
-                        await TaskSchedulerService.schedule_lead_sequence(
-                            user_id=campaign["user_id"],
-                            campaign_id=campaign["id"],
-                            lead_id=lead_id,
-                            sequence_steps=steps
-                        )
-                        await db.leads.update_one(
-                            {"_id": lead["_id"]},
-                            {"$set": {"status": "contacted", "updated_at": now}}
-                        )
+                        try:
+                            await TaskSchedulerService.schedule_lead_sequence(
+                                user_id=campaign["user_id"],
+                                campaign_id=campaign["id"],
+                                lead_id=lead_id,
+                                sequence_steps=steps
+                            )
+                            await db.leads.update_one(
+                                {"_id": lead["_id"]},
+                                {"$set": {"status": "contacted", "updated_at": now}}
+                            )
+                            logger.info("Scheduler: Lead %s (%s) sequence scheduled ✓", lead_id, lead.get("email"))
+                        except Exception as lead_exc:
+                            logger.error("Scheduler: FAILED to schedule lead %s (%s): %s", lead_id, lead.get("email"), lead_exc)
 
             # Process scheduled campaign tasks
             await TaskSchedulerService.process_pending_tasks()
@@ -428,14 +499,16 @@ def create_app() -> FastAPI:
         }
 
     from app.api.auth_routes import router as auth_router
-    from app.api.gmail_routes import router as gmail_router
     from app.api.campaign_routes import router as campaign_router
+    from app.api.chatbot_routes import router as chatbot_router
+    from app.api.gmail_routes import router as gmail_router
+    from app.api.integrations_routes import router as integrations_router
+    from app.api.system_routes import router as system_router
     from app.api.lead_routes import router as lead_router
     from app.api.tracking_routes import router as tracking_router
     from app.api.analytics_routes import router as analytics_router
     from app.api.ai_routes import router as ai_router
     from app.api.followup_routes import router as followup_router
-    from app.api.chatbot_routes import router as chatbot_router
     from app.api.reply_monitor_routes import router as reply_monitor_router
     from app.api.webhook_routes import router as webhook_router
     from app.api.lead_management_routes import router as lead_management_router
@@ -443,10 +516,11 @@ def create_app() -> FastAPI:
     from app.api.file_upload_routes import router as file_upload_router
     from app.api.discovery_routes import router as discovery_router
     from app.api.enrichment_routes import router as enrichment_router
-    from app.api.signal_routes import router as signal_router
-    from app.api.pitch_deck_routes import router as pitch_deck_router
+    # DISABLED MODULES (comment out to re-enable):
+    # from app.api.signal_routes import router as signal_router
+    # from app.api.pitch_deck_routes import router as pitch_deck_router
+    # from app.api.inbox_placement_routes import router as inbox_placement_router
     from app.api.linkedin_routes import router as linkedin_router
-    from app.api.inbox_placement_routes import router as inbox_placement_router
     from app.api.task_routes import router as task_router
     from app.api.task_comment_routes import router as task_comment_router
     from app.api.suggestion_routes import router as suggestion_router
@@ -470,16 +544,17 @@ def create_app() -> FastAPI:
     app.include_router(followup_router, prefix=api_prefix, tags=["Follow-ups"])
     app.include_router(chatbot_router, prefix=api_prefix, tags=["Chatbot"])
     app.include_router(reply_monitor_router, prefix=api_prefix, tags=["Reply Monitor"])
+    app.include_router(system_router)
     app.include_router(webhook_router, prefix=api_prefix, tags=["Webhooks"])
     app.include_router(lead_management_router, prefix=api_prefix, tags=["Lead Management"])
     app.include_router(chat_session_router, prefix=api_prefix, tags=["Chat Sessions"])
     app.include_router(file_upload_router, prefix=api_prefix, tags=["File Upload"])
     app.include_router(discovery_router, prefix=api_prefix, tags=["Lead Discovery"])
     app.include_router(enrichment_router, prefix=api_prefix, tags=["Contact Enrichment"])
-    app.include_router(signal_router, prefix=api_prefix, tags=["Signal Intelligence"])
-    app.include_router(pitch_deck_router, prefix=api_prefix, tags=["Pitch Decks"])
+    # DISABLED: app.include_router(signal_router, prefix=api_prefix, tags=["Signal Intelligence"])
+    # DISABLED: app.include_router(pitch_deck_router, prefix=api_prefix, tags=["Pitch Decks"])
     app.include_router(linkedin_router, prefix=api_prefix, tags=["LinkedIn"])
-    app.include_router(inbox_placement_router, prefix=api_prefix, tags=["Inbox Placement"])
+    # DISABLED: app.include_router(inbox_placement_router, prefix=api_prefix, tags=["Inbox Placement"])
     app.include_router(task_router, prefix=api_prefix)
     app.include_router(task_comment_router, prefix=api_prefix)
     app.include_router(suggestion_router, prefix=api_prefix)

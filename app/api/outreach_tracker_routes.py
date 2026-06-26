@@ -119,36 +119,22 @@ async def get_tracker_leads(
         else:
             assigned_user_filter["assigned_user"] = assigned_user
 
-    # 3. Combine with RBAC filter query
+    # 3. Build filter query — all users see all leads
+    # Visibility is controlled by the assigned_user tab filter, not by RBAC scoping.
+    # This ensures cross-user leads (e.g. Komalpreet's leads) appear for the whole team.
     filter_query: dict[str, Any] = {}
-    if user_role == "member":
-        user_display = current_user.get("display_name") or current_user.get("name", "")
-        member_scope = {
-            "$or": [
-                {"user_id": current_user["id"]},
-                {"assigned_user": user_display}
-            ]
-        }
-        and_clauses = [member_scope]
-        if core_filters:
-            and_clauses.append(core_filters)
-        if assigned_user_filter:
-            and_clauses.append(assigned_user_filter)
-        filter_query = {"$and": and_clauses}
-    else:
-        and_clauses = []
-        if core_filters:
-            and_clauses.append(core_filters)
-        if assigned_user_filter:
-            and_clauses.append(assigned_user_filter)
-        
-        if len(and_clauses) > 1:
-            filter_query = {"$and": and_clauses}
-        elif len(and_clauses) == 1:
-            filter_query = and_clauses[0]
-        else:
-            filter_query = {}
+    and_clauses = []
+    if core_filters:
+        and_clauses.append(core_filters)
+    if assigned_user_filter:
+        and_clauses.append(assigned_user_filter)
 
+    if len(and_clauses) > 1:
+        filter_query = {"$and": and_clauses}
+    elif len(and_clauses) == 1:
+        filter_query = and_clauses[0]
+    else:
+        filter_query = {}
 
     total = await db.leads.count_documents(filter_query)
     skip = (page - 1) * page_size

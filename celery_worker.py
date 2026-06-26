@@ -52,6 +52,14 @@ celery_app.conf.update(
     result_expires=3600,
     result_extended=True,
     beat_schedule={
+        "process-active-campaigns-every-30-seconds": {
+            "task": "app.tasks.campaign_tasks.process_active_campaigns",
+            "schedule": 30.0,
+        },
+        "process-scheduled-campaign-tasks-every-30-seconds": {
+            "task": "app.tasks.campaign_tasks.process_scheduled_campaign_tasks",
+            "schedule": 30.0,
+        },
         "poll-replies-every-5-minutes": {
             "task": "app.tasks.tracking_tasks.poll_gmail_replies",
             "schedule": 300.0,

@@ -226,6 +226,20 @@ async def start_campaign(campaign_id: str, user_id: str) -> Dict:
     except Exception as exc:
         logger.warning("Could not start campaign task: %s", exc)
 
+    # Notify campaign owner
+    try:
+        from app.services.notification_service import notify
+        await notify(
+            user_id=user_id,
+            type="campaign_started",
+            title="Campaign Started",
+            message=f"Campaign '{campaign.get('name', campaign_id)}' is now active and running.",
+            reference_id=campaign_id,
+            reference_type="campaign",
+        )
+    except Exception:
+        pass
+
     return await get_campaign(campaign_id, user_id)
 
 
@@ -241,6 +255,20 @@ async def pause_campaign(campaign_id: str, user_id: str) -> Dict:
         {"id": campaign_id},
         {"$set": {"status": "paused", "updated_at": datetime.now(timezone.utc)}},
     )
+
+    # Notify campaign owner
+    try:
+        from app.services.notification_service import notify
+        await notify(
+            user_id=user_id,
+            type="campaign_paused",
+            title="Campaign Paused",
+            message=f"Campaign '{campaign.get('name', campaign_id)}' has been paused.",
+            reference_id=campaign_id,
+            reference_type="campaign",
+        )
+    except Exception:
+        pass
 
     return await get_campaign(campaign_id, user_id)
 

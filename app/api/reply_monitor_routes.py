@@ -116,12 +116,16 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
     return await get_monitor_stats(current_user["id"])
 
 
+class UpdateDraftBody(BaseModel):
+    subject: str
+    body_text: str
+    gmail_account_id: Optional[str] = None
+
+
 @router.patch("/replies/{reply_id}/draft", summary="Update draft response")
 async def update_draft(
     reply_id: str,
-    subject: str,
-    body_text: str,
-    gmail_account_id: Optional[str] = None,
+    body: UpdateDraftBody,
     current_user: dict = Depends(get_current_user),
 ):
     """Update an existing draft response."""
@@ -133,14 +137,14 @@ async def update_draft(
 
     update = {
         "$set": {
-            "draft_response.subject": subject,
-            "draft_response.body_text": body_text,
+            "draft_response.subject": body.subject,
+            "draft_response.body_text": body.body_text,
             "draft_response.updated_at": now,
         }
     }
 
-    if gmail_account_id:
-        update["$set"]["gmail_account_id"] = gmail_account_id
+    if body.gmail_account_id:
+        update["$set"]["gmail_account_id"] = body.gmail_account_id
 
     result = await db.replies.update_one({"id": reply_id}, update)
     if result.matched_count == 0:

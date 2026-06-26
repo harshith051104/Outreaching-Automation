@@ -113,8 +113,8 @@ export default function Sidebar() {
         { href: "/dashboard/leads", label: "Leads", icon: Users },
         { href: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone },
         { href: "/dashboard/outreach-tracker", label: "Outreach Tracker", icon: ClipboardList },
-        { href: "/dashboard/signals", label: "Signals", icon: Brain, badge: "New" },
-        { href: "/dashboard/opportunities", label: "Opportunities", icon: Lightbulb },
+        // DISABLED: { href: "/dashboard/signals", label: "Signals", icon: Brain, badge: "New" },
+        // DISABLED: { href: "/dashboard/opportunities", label: "Opportunities", icon: Lightbulb },
       ]
     },
     {
@@ -123,7 +123,7 @@ export default function Sidebar() {
         { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
         { href: "/dashboard/chatbot", label: "Elly", icon: Bot },
         { href: "/dashboard/reply-monitor", label: "Reply Monitor", icon: Inbox, badgeCount: pendingRepliesCount },
-        { href: "/dashboard/inbox-placement", label: "Inbox Placement", icon: MailCheck },
+        // DISABLED: { href: "/dashboard/inbox-placement", label: "Inbox Placement", icon: MailCheck },
       ]
     },
     {
@@ -136,8 +136,8 @@ export default function Sidebar() {
     {
       label: "Resources",
       items: [
-        { href: "/dashboard/knowledge-base", label: "Knowledge Base", icon: BookOpen },
-        { href: "/dashboard/pitch-deck", label: "Pitch Decks", icon: FileText },
+        // DISABLED: { href: "/dashboard/knowledge-base", label: "Knowledge Base", icon: BookOpen },
+        // DISABLED: { href: "/dashboard/pitch-deck", label: "Pitch Decks", icon: FileText },
         { href: "/dashboard/settings", label: "Settings", icon: Settings },
       ]
     },

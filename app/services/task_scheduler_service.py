@@ -175,6 +175,12 @@ class TaskSchedulerService:
                         }
                     }
                 )
+                try:
+                    await TaskSchedulerService._reschedule_next_sequence_step(
+                        db, campaign_id, lead_id, task.get("step_number") or 1
+                    )
+                except Exception as reschedule_exc:
+                    logger.error("Failed to reschedule next step for lead %s: %s", lead_id, reschedule_exc)
             except Exception as e:
                 logger.exception("Failed to execute scheduled task %s: %s", task_id, e)
                 await db.scheduled_tasks.update_one(
@@ -187,6 +193,58 @@ class TaskSchedulerService:
                         }
                     }
                 )
+
+    @staticmethod
+    async def _reschedule_next_sequence_step(db, campaign_id: str, lead_id: str, current_step_num: int) -> None:
+        """
+        Adjusts the scheduled_at time of the next sequence step (current_step_num + 1)
+        based on the actual execution time of the current step, maintaining the relative delay.
+        """
+        next_task = await db.scheduled_tasks.find_one({
+            "campaign_id": campaign_id,
+            "lead_id": lead_id,
+            "step_number": current_step_num + 1,
+            "status": "pending"
+        })
+        if not next_task:
+            return
+
+        campaign = await db.campaigns.find_one({"id": campaign_id})
+        if not campaign or not campaign.get("sequence_steps"):
+            return
+
+        steps = campaign["sequence_steps"]
+        current_delay = 0
+        next_delay = 0
+        current_found = False
+        next_found = False
+
+        for step in steps:
+            step_num = step.get("step_number") or 1
+            if step_num == current_step_num:
+                current_delay = step.get("delay_days") or 0
+                current_found = True
+            elif step_num == current_step_num + 1:
+                next_delay = step.get("delay_days") or 0
+                next_found = True
+
+        if current_found and next_found:
+            delta_days = next_delay - current_delay
+            if delta_days < 0:
+                delta_days = 0
+            
+            new_scheduled_at = datetime.now(timezone.utc) + timedelta(days=delta_days)
+            await db.scheduled_tasks.update_one(
+                {"id": next_task["id"]},
+                {"$set": {
+                    "scheduled_at": new_scheduled_at,
+                    "updated_at": datetime.now(timezone.utc)
+                }}
+            )
+            logger.info(
+                "Rescheduled next task %s (step %d) for lead %s to %s (delta: %d days)",
+                next_task["id"], current_step_num + 1, lead_id, new_scheduled_at, delta_days
+            )
 
     @staticmethod
     async def _execute_email_task(task: Dict[str, Any], lead: Dict[str, Any]) -> None:
@@ -202,6 +260,11 @@ class TaskSchedulerService:
         campaign = await db.campaigns.find_one({"id": task["campaign_id"]})
         gmail_id = campaign.get("gmail_account_id") if campaign else ""
 
+        if gmail_id:
+            gmail_acct = await db.gmail_accounts.find_one({"id": gmail_id, "is_active": True})
+            if not gmail_acct:
+                gmail_id = ""
+
         if not gmail_id:
             active_acct = await db.gmail_accounts.find_one({"user_id": task["user_id"], "is_active": True})
             gmail_id = active_acct["id"] if active_acct else ""
@@ -213,6 +276,11 @@ class TaskSchedulerService:
             if gmail_acct:
                 sender_name = gmail_acct.get("name", "")
                 sender_email = gmail_acct.get("email", "")
+
+        lead_email = lead.get("email", "").strip()
+        if not lead_email:
+            logger.warning("Scheduled email task skipped for lead %s — no email address found.", lead.get("id"))
+            return
 
         subject_template = task["data"].get("subject_template", "Outreach")
         body_template = task["data"].get("body_template", "Hi {{first_name}}")
@@ -230,7 +298,7 @@ class TaskSchedulerService:
                 campaign_id=task["campaign_id"],
                 lead_id=lead["id"],
                 gmail_account_id=gmail_id,
-                to=lead["email"],
+                to=lead_email,
                 subject=subject,
                 body_html=body_html,
                 sequence_number=task.get("step_number") or 1
@@ -262,12 +330,26 @@ class TaskSchedulerService:
                 email_subject=subject,
                 email_body=body
             )
-
             await db.campaigns.update_one(
                 {"id": task["campaign_id"]},
                 {"$inc": {"sent_count": 1}}
             )
-            logger.info("Scheduled email sent to %s successfully.", lead["email"])
+
+            # Notify campaign owner
+            try:
+                from app.services.notification_service import notify
+                await notify(
+                    user_id=task["user_id"],
+                    type="email_sent",
+                    title="Sequence Email Sent",
+                    message=f"Step {task.get('step_number', 1)} email sent to {lead_email}.",
+                    reference_id=task["campaign_id"],
+                    reference_type="campaign",
+                )
+            except Exception:
+                pass
+
+            logger.info("Scheduled email sent to %s successfully.", lead_email)
         else:
             raise Exception("No active Gmail account found connected for user to send sequence email")
 

@@ -13,6 +13,8 @@ import {
   testIntegration,
   getHealthStatus,
   extractSpreadsheetId,
+  getSystemEnv,
+  updateSystemEnv,
 } from "@/services/integrations-api";
 
 // ── Status Badge ─────────────────────────────────────────────────────────────
@@ -247,8 +249,11 @@ function HealthBadge({ ok, name }: { ok: boolean | null; name: string }) {
 export default function IntegrationsCenter() {
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
   const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [systemEnv, setSystemEnv] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState("");
+  const [savingEnv, setSavingEnv] = useState(false);
+  const [showMongoURL, setShowMongoURL] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -257,9 +262,12 @@ export default function IntegrationsCenter() {
 
   const loadAll = async () => {
     try {
-      const [ints, h] = await Promise.all([getIntegrations(), getHealthStatus()]);
+      const [ints, h, env] = await Promise.all([getIntegrations(), getHealthStatus(), getSystemEnv()]);
       setIntegrations(ints);
       setHealth(h);
+      if (env?.variables) {
+        setSystemEnv(env.variables);
+      }
     } catch (e) {
       console.error("Failed to load integrations:", e);
     } finally {
@@ -310,14 +318,63 @@ export default function IntegrationsCenter() {
         Keys are used server-side only and never appear in logs or responses.
       </div>
 
-      {/* Infrastructure Health */}
+      {/* Infrastructure Health & Settings */}
       {health && (
-        <div>
-          <h3 className="text-sm font-semibold text-slate-300 mb-3">Platform Health</h3>
-          <div className="flex flex-wrap gap-2">
-            <HealthBadge ok={health.mongodb?.ok} name="MongoDB" />
-            <HealthBadge ok={health.qdrant?.ok} name="Qdrant" />
-            <HealthBadge ok={health.redis?.ok} name="Redis" />
+        <div className="bg-[#0d0d14] border border-white/8 rounded-2xl p-5 space-y-5">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-300 mb-3">Platform Infrastructure Health</h3>
+            <div className="flex flex-wrap gap-2">
+              <HealthBadge ok={health.mongodb?.ok} name="MongoDB" />
+              <HealthBadge ok={health.qdrant?.ok} name="Qdrant" />
+              <HealthBadge ok={health.redis?.ok} name="Redis" />
+            </div>
+          </div>
+          
+          <div className="border-t border-white/5 pt-5">
+            <h3 className="text-sm font-semibold text-slate-300 mb-2">Advanced Infrastructure Overrides</h3>
+            <p className="text-xs text-slate-400 mb-4 max-w-2xl">
+              These settings are written directly to the server's `.env` file. You must restart the backend containers for changes to take effect.
+            </p>
+            
+            <div className="space-y-4 max-w-2xl">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">MongoDB Connection URL</label>
+                <div className="relative">
+                  <input
+                    type={showMongoURL ? "text" : "password"}
+                    value={systemEnv["MONGODB_URL"] || ""}
+                    onChange={e => setSystemEnv(v => ({ ...v, MONGODB_URL: e.target.value }))}
+                    placeholder="mongodb://localhost:27017"
+                    className="w-full bg-[#0a0a0f] border border-white/10 rounded-xl px-3 py-2 pr-10 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowMongoURL(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  >
+                    {showMongoURL ? "🙈" : "👁"}
+                  </button>
+                </div>
+              </div>
+              
+              <button
+                onClick={async () => {
+                  setSavingEnv(true);
+                  try {
+                    const res = await updateSystemEnv(systemEnv);
+                    showToast(`✓ ${res.message}`);
+                  } catch (e: any) {
+                    showToast(`❌ Error saving env: ${e.message}`);
+                  } finally {
+                    setSavingEnv(false);
+                  }
+                }}
+                disabled={savingEnv}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white rounded-xl text-sm font-medium transition-all"
+              >
+                {savingEnv ? "Saving to .env..." : "Save Infrastructure Settings"}
+              </button>
+            </div>
           </div>
         </div>
       )}

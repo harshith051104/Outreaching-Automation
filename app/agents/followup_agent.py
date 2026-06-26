@@ -46,7 +46,7 @@ def generate_followup(
     role = lead_data.get("role", "Unknown")
     sender_name = lead_data.get("sender_name", "").strip()
     if not sender_name:
-        raise ValueError("sender_name is required for follow-up generation")
+        sender_name = "Founder"
 
     original_subject = original_email.get("subject", "")
     original_body = original_email.get("body_text", "")

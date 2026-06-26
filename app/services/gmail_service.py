@@ -62,12 +62,30 @@ SCOPES = [
 ]
 
 
-def _build_flow(state: str | None = None) -> Flow:
+async def _get_google_credentials(user_id: str | None = None) -> tuple[str, str]:
+    """Retrieve Google OAuth credentials from DB or fallback to env."""
+    from app.services.integrations_service import get_integration
+    
+    client_id = settings.GOOGLE_CLIENT_ID
+    client_secret = settings.GOOGLE_CLIENT_SECRET
+    
+    if user_id:
+        creds = await get_integration(user_id, "google_oauth_credentials")
+        if creds and creds.get("client_id") and creds.get("client_secret"):
+            client_id = creds["client_id"]
+            client_secret = creds["client_secret"]
+            
+    return client_id, client_secret
+
+
+async def _build_flow(state: str | None = None, user_id: str | None = None) -> Flow:
     """Build a Google OAuth2 flow from configured client credentials."""
+    client_id, client_secret = await _get_google_credentials(user_id)
+    
     client_config = {
         "web": {
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [settings.GOOGLE_REDIRECT_URI],
@@ -92,12 +110,14 @@ async def _load_gmail_account(gmail_account_id: str) -> dict:
 
 async def _build_service(account: dict):
     """Build an authenticated Gmail API service from a stored account."""
+    client_id, client_secret = await _get_google_credentials(account.get("user_id"))
+
     creds = Credentials(
         token=account["access_token"],
         refresh_token=account.get("refresh_token"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.GOOGLE_CLIENT_ID,
-        client_secret=settings.GOOGLE_CLIENT_SECRET,
+        client_id=client_id,
+        client_secret=client_secret,
     )
 
     # Refresh if expired
@@ -145,7 +165,7 @@ async def get_auth_url(user_id: str) -> tuple:
     Returns (authorization_url, state).
     The state is our custom session_id that Google passes back in the callback.
     """
-    flow = _build_flow()
+    flow = await _build_flow(user_id=user_id)
 
     # Generate a session ID — this will be the OAuth `state` parameter so
     # Google returns it in the callback and we can look up the user_id.
@@ -196,7 +216,7 @@ async def handle_callback(code: str, state: str | None) -> dict:
     user_id = session["user_id"]
 
     # Rebuild the flow for token exchange (no need to store the flow object)
-    flow = _build_flow(state=state)
+    flow = await _build_flow(state=state, user_id=user_id)
     
     # Restore the code_verifier for PKCE if it exists
     code_verifier = session.get("code_verifier")
@@ -206,13 +226,15 @@ async def handle_callback(code: str, state: str | None) -> dict:
     flow.fetch_token(code=code)
     credentials = flow.credentials
 
+    client_id, client_secret = await _get_google_credentials(user_id)
+
     # Build a temporary service to fetch the user's email address
     service = build_gmail_service({
         "access_token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": "https://oauth2.googleapis.com/token",
-        "client_id": settings.GOOGLE_CLIENT_ID,
-        "client_secret": settings.GOOGLE_CLIENT_SECRET,
+        "client_id": client_id,
+        "client_secret": client_secret,
         "scopes": SCOPES,
     })
     profile = service.users().getProfile(userId="me").execute()
@@ -272,14 +294,22 @@ async def send_email(
     subject: str,
     body_html: str,
     thread_id: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
     attachments: Optional[list] = None,
 ) -> dict:
     """
     Send an email via the Gmail API.
 
+    For replies, pass thread_id + in_reply_to + references to continue
+    the existing Gmail thread (RFC 2822 compliant threading).
+
     Args:
+        thread_id: Gmail thread ID — threads the message in Gmail's UI.
+        in_reply_to: Message-ID of the email being replied to (RFC 2822).
+        references: Space-separated list of ancestor Message-IDs (RFC 2822).
         attachments: List of dicts with 'filename', 'content', 'content_type' keys
-        
+
     Returns a dict with message id and thread id from the Gmail response.
     """
     async with handle_gmail_exceptions(gmail_account_id):
@@ -291,7 +321,7 @@ async def send_email(
             msg = MIMEMultipart("mixed")
         else:
             msg = MIMEMultipart("alternative")
-        
+
         from email.utils import formataddr
         msg["To"] = to
         if account.get("name"):
@@ -299,21 +329,30 @@ async def send_email(
         else:
             msg["From"] = account["email"]
         msg["Subject"] = subject
-        
+
+        # RFC 2822 threading headers — makes the reply appear in the same thread
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        if references:
+            msg["References"] = references
+        elif in_reply_to:
+            # If no explicit references chain, use in_reply_to as the references
+            msg["References"] = in_reply_to
+
         # Add HTML body
         msg.attach(MIMEText(body_html, "html"))
-        
+
         # Add attachments if provided
         if attachments:
             for att in attachments:
                 att_content = att.get("content", b"")
                 att_filename = att.get("filename", "file")
                 att_content_type = att.get("content_type", "application/octet-stream")
-                
+
                 # If content is base64 encoded string, decode it
                 if isinstance(att_content, str):
                     att_content = base64.b64decode(att_content)
-                
+
                 from email.mime.base import MIMEBase
                 from email.encoders import encode_base64
                 part = MIMEBase("application", "octet-stream")

@@ -1418,8 +1418,6 @@ async def _send_connection_request_pw(linkedin_url: str, note: str, cookies: Lis
             logger.info("Playwright helper: navigating to profile URL %s ...", linkedin_url)
             await page.goto(linkedin_url, wait_until="domcontentloaded", timeout=45000)
             logger.info("Playwright helper: navigation completed")
-            import asyncio
-            await asyncio.sleep(3)
         except Exception as e:
             logger.warning("page.goto connection profile timed out, attempting to proceed anyway: %s", e)
         await _random_delay(1, 2)

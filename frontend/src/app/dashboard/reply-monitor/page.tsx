@@ -520,8 +520,20 @@ export default function ReplyMonitorPage() {
                 {/* Draft Response */}
                 {selectedReply.draft_response ? (
                   <div className="space-y-3">
-                    <div className="text-xs font-bold uppercase tracking-wider" style={{ color: "var(--sidebar-text-muted)" }}>
-                      AI Suggested Response (Editable):
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider" style={{ color: "var(--sidebar-text-muted)" }}>
+                        AI Suggested Response (Editable):
+                      </span>
+                      <button
+                        onClick={() => handleGenerateDraft(selectedReply.id, selectedGmailAccountId || undefined)}
+                        disabled={generatingDraft === selectedReply.id}
+                        className="p-1 rounded hover:opacity-80 transition-all flex items-center gap-1 text-[11px] font-semibold disabled:opacity-50"
+                        style={{ color: "var(--primary)" }}
+                        title="Regenerate Draft"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        {generatingDraft === selectedReply.id ? "Regenerating..." : "Regenerate"}
+                      </button>
                     </div>
 
                     <div className="space-y-2 rounded-xl p-3" style={{ background: "rgba(124,92,255,0.05)", border: "1px solid rgba(124,92,255,0.15)" }}>

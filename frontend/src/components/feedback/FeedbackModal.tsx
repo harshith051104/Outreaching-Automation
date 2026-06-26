@@ -2,10 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { Sparkles, MessageSquare, X, Info, Lightbulb, EyeOff } from "lucide-react";
-import ScreenshotCapture from "./ScreenshotCapture";
+import { Sparkles, X, Info, EyeOff } from "lucide-react";
 import { createSuggestion } from "@/services/suggestion-api";
-import api from "@/services/api";
 
 interface FeedbackModalProps {
   isOpen: boolean;
@@ -26,14 +24,9 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("suggestion");
   const [anonymous, setAnonymous] = useState(false);
-  
-  const [screenshotData, setScreenshotData] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-
-  // Hidden state for capture hide-and-show
-  const [isHiddenForCapture, setIsHiddenForCapture] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -41,10 +34,8 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
       setDescription("");
       setCategory("suggestion");
       setAnonymous(false);
-      setScreenshotData(null);
       setError(null);
       setSuccess(false);
-      setIsHiddenForCapture(false);
     }
   }, [isOpen]);
 
@@ -64,7 +55,7 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
       "/dashboard/settings": "Settings",
       "/dashboard/suggestions": "Suggestions Box",
     };
-    
+
     if (mapping[path]) return mapping[path];
     if (path.startsWith("/dashboard/suggestions/")) return "Suggestion Details";
     if (path.startsWith("/dashboard/campaigns/")) return "Campaign Details";
@@ -76,21 +67,7 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
     return "AI Outreach Platform";
   };
 
-  const currentUrl = typeof window !== "undefined" ? window.location.href : "";
   const pageName = getPageName(pathname);
-
-  // Convert Base64 dataURL to Blob for file upload
-  const dataURLtoBlob = (dataurl: string) => {
-    const arr = dataurl.split(",");
-    const mime = arr[0].match(/:(.*?);/)![1];
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-      u8arr[n] = bstr.charCodeAt(n);
-    }
-    return new Blob([u8arr], { type: mime });
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,30 +77,6 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
       setSubmitting(true);
       setError(null);
 
-      let screenshotUrl = "";
-      let hasScreenshot = false;
-
-      // 1. Upload screenshot if available
-      if (screenshotData) {
-        try {
-          const blob = dataURLtoBlob(screenshotData);
-          const formData = new FormData();
-          formData.append("file", blob, "feedback_screenshot.png");
-
-          const fileResp = await api.post("/files/upload", formData, {
-            headers: { "Content-Type": "multipart/form-data" },
-          });
-          
-          if (fileResp.data && fileResp.data.download_url) {
-            screenshotUrl = fileResp.data.download_url;
-            hasScreenshot = true;
-          }
-        } catch (uploadErr) {
-          console.error("Screenshot upload failed, continuing without screenshot", uploadErr);
-        }
-      }
-
-      // 2. Submit Suggestion
       await createSuggestion({
         title: title.trim(),
         description: description.trim(),
@@ -132,15 +85,13 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
         submitted_from: "widget",
         page_name: pageName,
         page_url: pathname,
-        screenshot_url: screenshotUrl || undefined,
-        has_screenshot: hasScreenshot,
+        has_screenshot: false,
         browser_info: typeof navigator !== "undefined" ? navigator.userAgent : "Unknown Browser",
       });
 
       setSuccess(true);
       setTimeout(() => {
         onClose();
-        // Fire custom event to refresh lists if Suggestions list page is open
         if (typeof window !== "undefined") {
           window.dispatchEvent(new Event("suggestion-submitted"));
         }
@@ -155,20 +106,18 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
   };
 
   return (
-    <div 
+    <div
       id="quick-suggestion-modal"
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-all duration-300 ${
-        isHiddenForCapture ? "opacity-0 pointer-events-none" : "opacity-100"
-      }`}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
     >
       <div className="w-full max-w-lg rounded-2xl p-6 bg-slate-900 border border-slate-800 text-white shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh]">
         <div className="absolute -right-20 -top-20 h-48 w-48 opacity-10 rounded-full blur-3xl pointer-events-none bg-indigo-500" />
-        
+
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800 shrink-0">
           <h2 className="text-base font-extrabold tracking-tight flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-indigo-400" />
-            Quick Suggestion & Feedback
+            Quick Suggestion &amp; Feedback
           </h2>
           <button
             onClick={onClose}
@@ -239,7 +188,7 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
 
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5 text-slate-400">
-                Description & Business Impact *
+                Description &amp; Business Impact *
               </label>
               <textarea
                 required
@@ -248,18 +197,6 @@ export default function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className="w-full text-xs bg-slate-800 border border-slate-700/60 rounded-xl px-3 py-2 text-slate-100 outline-none focus:ring-1 focus:ring-indigo-500 transition-all resize-none font-medium"
-              />
-            </div>
-
-            {/* Screenshot Capture Section */}
-            <div className="space-y-2 border-t border-slate-800 pt-3.5">
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                Attachment
-              </label>
-              <ScreenshotCapture
-                onScreenshotConfirmed={setScreenshotData}
-                onCaptureStart={() => setIsHiddenForCapture(true)}
-                onCaptureEnd={() => setIsHiddenForCapture(false)}
               />
             </div>
 

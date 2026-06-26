@@ -161,7 +161,13 @@ async def generate_draft_response(reply_id: str, gmail_account_id: Optional[str]
             },
         )
     except Exception as exc:
-        logger.warning("Draft generation failed: %s", exc)
+        import traceback
+        try:
+            with open(r"c:\Users\sriha\My work\Outreach\ai_outreach_v2_md_agents\real_draft_error.txt", "w", encoding="utf-8") as f:
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+        logger.exception("Draft generation failed: %s", exc)
         draft = {
             "subject": f"Re: {reply.get('subject', '')}",
             "body_text": "",
@@ -187,6 +193,23 @@ async def generate_draft_response(reply_id: str, gmail_account_id: Optional[str]
             "classification_reasoning": classification.get("reasoning") if classification else None,
         }},
     )
+
+    # Notify campaign owner that a draft reply is ready for review
+    try:
+        campaign = await db.campaigns.find_one({"id": reply.get("campaign_id", "")}, {"user_id": 1, "name": 1})
+        if campaign and campaign.get("user_id"):
+            from app.services.notification_service import notify
+            lead_from = reply.get("from_email", "a lead")
+            await notify(
+                user_id=campaign["user_id"],
+                type="reply_draft_generated",
+                title="Reply Draft Ready",
+                message=f"AI generated a draft reply to {lead_from} for campaign '{campaign.get('name', '')}'.",
+                reference_id=reply_id,
+                reference_type="reply",
+            )
+    except Exception:
+        pass
 
     return {
         "reply_id": reply_id,
@@ -226,6 +249,8 @@ async def approve_draft(reply_id: str, user_id: str) -> dict:
 
     # Get thread_id - from reply document first, fallback to original email's thread
     gmail_thread_id = reply.get("gmail_thread_id", "")
+    # The gmail_message_id of the reply we received — used as In-Reply-To
+    gmail_message_id = reply.get("gmail_message_id", "")
     if not gmail_thread_id and reply.get("email_id"):
         original_email = await db.emails.find_one({"id": reply["email_id"]})
         if original_email:
@@ -256,6 +281,9 @@ async def approve_draft(reply_id: str, user_id: str) -> dict:
             subject=draft.get("subject", ""),
             body_html=body_html,
             thread_id=gmail_thread_id,
+            # RFC 2822 threading: continue in the same Gmail thread
+            in_reply_to=gmail_message_id if gmail_message_id else None,
+            references=gmail_message_id if gmail_message_id else None,
         )
 
         now = datetime.now(timezone.utc)

@@ -53,6 +53,14 @@ export const PROVIDER_FIELDS: Record<string, { key: string; label: string; place
       isTextarea: true,
     },
   ],
+  google_oauth_credentials: [
+    { key: "client_id", label: "Google Client ID", placeholder: "940350711002-....apps.googleusercontent.com" },
+    { key: "client_secret", label: "Google Client Secret", placeholder: "GOCSPX-..." },
+  ],
+  qdrant: [
+    { key: "url", label: "Qdrant URL", placeholder: "http://localhost:6333 or https://cluster.qdrant.tech" },
+    { key: "api_key", label: "Qdrant API Key (Optional for local)", placeholder: "api-key..." },
+  ],
 };
 
 export const PROVIDER_ICONS: Record<string, string> = {
@@ -64,6 +72,8 @@ export const PROVIDER_ICONS: Record<string, string> = {
   linkedin_session: "💼",
   google_sheets: "📊",
   gmail_oauth: "📧",
+  google_oauth_credentials: "🔐",
+  qdrant: "🗄️",
 };
 
 /**
@@ -130,5 +140,21 @@ export async function getAiConfig(): Promise<any> {
  */
 export async function saveAiConfig(config: any): Promise<{ message: string }> {
   const res = await api.post("/integrations/ai-config", config);
+  return res.data;
+}
+
+/**
+ * Get system .env infrastructure variables.
+ */
+export async function getSystemEnv(): Promise<{ variables: Record<string, string> }> {
+  const res = await api.get("/system/env");
+  return res.data;
+}
+
+/**
+ * Update system .env infrastructure variables.
+ */
+export async function updateSystemEnv(variables: Record<string, string>): Promise<{ message: string }> {
+  const res = await api.post("/system/env", { variables });
   return res.data;
 }

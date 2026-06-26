@@ -226,6 +226,10 @@ async def _run_test(provider: str, creds: dict) -> dict[str, Any]:
         return await _test_linkedin(creds)
     elif provider == "google_sheets":
         return await _test_google_sheets(creds)
+    elif provider == "google_oauth_credentials":
+        return await _test_google_oauth_credentials(creds)
+    elif provider == "qdrant":
+        return await _test_qdrant(creds)
     else:
         return {"ok": False, "message": f"No test implementation for provider '{provider}'."}
 
@@ -352,6 +356,34 @@ async def _test_google_sheets(creds: dict) -> dict:
     except json.JSONDecodeError:
         return {"ok": False, "message": "Service Account JSON is not valid JSON."}
     return {"ok": True, "message": "Google Sheets credentials are configured (live test runs on first sync)."}
+
+
+async def _test_google_oauth_credentials(creds: dict) -> dict:
+    client_id = creds.get("client_id", "")
+    client_secret = creds.get("client_secret", "")
+    if not client_id or not client_secret:
+        return {"ok": False, "message": "Client ID and Client Secret are required."}
+    return {"ok": True, "message": "Google OAuth Credentials configured. You can now connect your Gmail accounts via the Gmail tab."}
+
+
+async def _test_qdrant(creds: dict) -> dict:
+    url = creds.get("url", "")
+    api_key = creds.get("api_key", "")
+    if not url:
+        return {"ok": False, "message": "Qdrant URL is required."}
+    
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            headers = {}
+            if api_key:
+                headers["api-key"] = api_key
+            clean_url = url.strip().rstrip('/')
+            r = await client.get(f"{clean_url}/collections", headers=headers)
+            if r.status_code == 200:
+                return {"ok": True, "message": "Qdrant connected successfully."}
+            return {"ok": False, "message": f"Qdrant returned {r.status_code}: {r.text[:100]}"}
+    except Exception as exc:
+        return {"ok": False, "message": f"Failed to connect to Qdrant: {exc}"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

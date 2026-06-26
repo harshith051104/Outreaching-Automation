@@ -212,13 +212,15 @@ export default function ChatbotPage() {
 
   const fetchPendingApprovals = async () => {
     try {
-      const response = await api.get("/chatbot/approvals");
+      const currentSessionId = activeSessionIdRef.current;
+      // Scope approvals to the current session so they don't bleed into other tabs
+      const params = currentSessionId ? { chat_session_id: currentSessionId } : {};
+      const response = await api.get("/chatbot/approvals", { params });
       if (response.status === 200) {
         const data = response.data;
         setPendingApprovals(data);
         
         // Auto-inject new approvals into the active chat session
-        const currentSessionId = activeSessionIdRef.current;
         if (currentSessionId) {
           setMessages((currentMessages) => {
             const existingIds = new Set(currentMessages.map(m => m.pendingApproval?.action_id).filter(Boolean));

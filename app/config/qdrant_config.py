@@ -23,6 +23,23 @@ _VECTOR_SIZE: int = 384
 _qdrant_client: QdrantClient | None = None
 
 
+def _get_qdrant_config_sync() -> tuple[str | None, str | None]:
+    """Fetch global Qdrant configuration from DB synchronously."""
+    from pymongo import MongoClient
+    try:
+        client = MongoClient(settings.MONGODB_URL, serverSelectionTimeoutMS=2000)
+        db = client[settings.MONGODB_DB_NAME]
+        doc = db["user_integrations"].find_one({"provider": "qdrant"})
+        if doc and "encrypted_data" in doc:
+            from app.utils.security import decrypt_dict
+            creds = decrypt_dict(doc["encrypted_data"])
+            if creds and creds.get("url"):
+                return creds.get("url"), creds.get("api_key")
+    except Exception:
+        pass
+    return settings.QDRANT_URL, settings.QDRANT_API_KEY
+
+
 def get_qdrant_client() -> QdrantClient:
     """Return a (cached) Qdrant client pointed at the configured host/port or URL.
     
@@ -33,15 +50,17 @@ def get_qdrant_client() -> QdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
         try:
+            url, api_key = _get_qdrant_config_sync()
+            
             # Attempt to connect to remote Qdrant server
-            if settings.QDRANT_URL:
+            if url:
                 client = QdrantClient(
-                    url=settings.QDRANT_URL,
-                    api_key=settings.QDRANT_API_KEY or None,
+                    url=url,
+                    api_key=api_key or None,
                     timeout=5.0,
                     check_compatibility=False,
                 )
-                display_dest = settings.QDRANT_URL
+                display_dest = url
             else:
                 client = QdrantClient(
                     host=settings.QDRANT_HOST,
@@ -60,7 +79,8 @@ def get_qdrant_client() -> QdrantClient:
             local_path = os.path.join(base_dir, "storage", "qdrant_local")
             os.makedirs(local_path, exist_ok=True)
             
-            display_dest = settings.QDRANT_URL if settings.QDRANT_URL else f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
+            url, _ = _get_qdrant_config_sync()
+            display_dest = url if url else f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
             logger.warning(
                 "Could not connect to Qdrant server at %s (%s). "
                 "Falling back to local persistent storage at '%s'.",

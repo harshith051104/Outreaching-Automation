@@ -33,6 +33,11 @@ async def _execute_campaign_async(campaign_id: str) -> dict:
         return {"status": "skipped", "message": f"Campaign is {campaign.get('status')}"}
 
     gmail_account_id = campaign.get("gmail_account_id", "")
+    if gmail_account_id:
+        gmail_acct = await db.gmail_accounts.find_one({"id": gmail_account_id, "is_active": True})
+        if not gmail_acct:
+            gmail_account_id = ""
+
     if not gmail_account_id:
         account = await db.gmail_accounts.find_one({"user_id": campaign["user_id"], "is_active": True})
         if account:
@@ -59,11 +64,26 @@ async def _execute_campaign_async(campaign_id: str) -> dict:
     results = []
     for lead in leads:
         try:
-            result = await _process_lead(campaign, lead)
-            results.append({"lead_id": lead["id"], "status": result})
+            if campaign.get("sequence_steps"):
+                from app.services.task_scheduler_service import TaskSchedulerService
+                await TaskSchedulerService.schedule_lead_sequence(
+                    user_id=campaign["user_id"],
+                    campaign_id=campaign["id"],
+                    lead_id=lead["id"],
+                    sequence_steps=campaign["sequence_steps"]
+                )
+                await db.leads.update_one(
+                    {"id": lead["id"]},
+                    {"$set": {"status": "contacted", "updated_at": datetime.now(timezone.utc)}}
+                )
+                results.append({"lead_id": lead["id"], "status": "scheduled_sequence"})
+            else:
+                result = await _process_lead(campaign, lead)
+                results.append({"lead_id": lead["id"], "status": result})
         except Exception as exc:
             logger.exception("Failed to process lead %s: %s", lead["id"], exc)
             results.append({"lead_id": lead["id"], "status": "error", "error": str(exc)})
+
 
     return {
         "status": "processed",
@@ -263,3 +283,101 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
             )
 
     return "sent"
+
+
+from app.config.redis_config import celery_app
+
+@celery_app.task(name="app.tasks.campaign_tasks.process_active_campaigns")
+def process_active_campaigns_task():
+    """Celery task wrapper to find active campaigns and schedule sequences for new leads."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(_process_active_campaigns_async())
+
+
+async def _process_active_campaigns_async() -> dict:
+    from app.config.mongodb_config import get_database
+    from app.services.task_scheduler_service import TaskSchedulerService
+    
+    db = await get_database()
+    now = datetime.now(timezone.utc)
+    
+    active_campaigns = await db.campaigns.find({"status": "active"}).to_list(length=100)
+    scheduled_count = 0
+    
+    for campaign in active_campaigns:
+        pending_leads = await db.leads.find({
+            "campaign_id": campaign["id"],
+            "status": "new"
+        }).to_list(length=50)
+        
+        if pending_leads:
+            logger.info("Celery Scheduler: Scheduling sequences for %d new leads in campaign '%s'",
+                        len(pending_leads), campaign.get("name"))
+            
+            if campaign.get("subject_template") or campaign.get("body_template"):
+                steps = campaign.get("sequence_steps") or [
+                    {"step_number": 1, "channel": "email", "delay_days": 0,
+                     "subject_template": campaign.get("subject_template") or "Quick question",
+                     "body_template": campaign.get("body_template") or "Hi {{first_name}},"}
+                ]
+            else:
+                steps = campaign.get("sequence_steps") or [
+                    {"step_number": 1, "channel": "linkedin", "delay_days": 0,
+                     "body_template": "Hi {{first_name}}, I'd like to connect."},
+                    {"step_number": 2, "channel": "email", "delay_days": 3,
+                     "subject_template": campaign.get("subject_template") or "Quick question",
+                     "body_template": campaign.get("body_template") or "Hi {{first_name}},"},
+                    {"step_number": 3, "channel": "linkedin", "delay_days": 6,
+                     "body_template": "Hi {{first_name}}, I sent you a message earlier. Would love to connect."},
+                    {"step_number": 4, "channel": "email", "delay_days": 10,
+                     "subject_template": "Re: " + (campaign.get("subject_template") or "Quick question"),
+                     "body_template": "Hi {{first_name}},\n\nJust following up on my previous message. Any thoughts?"},
+                    {"step_number": 5, "channel": "linkedin", "delay_days": 15,
+                     "body_template": "Hi {{first_name}}, great post! Just engaged with it."},
+                    {"step_number": 6, "channel": "email", "delay_days": 20,
+                     "subject_template": "{{company}} + {{sender_name}}",
+                     "body_template": "Hi {{first_name}},\n\nI noticed {{company}} has been growing rapidly. We've helped similar companies achieve great results.\n\nWould love to share how we could help.\n\nBest"},
+                    {"step_number": 7, "channel": "email", "delay_days": 28,
+                     "subject_template": "One last try",
+                     "body_template": "Hi {{first_name}},\n\nI hope this finds you well. I'll respect your time and won't reach out again after this.\n\nBest"}
+                ]
+                
+            for lead in pending_leads:
+                lead_id = lead.get("id") or str(lead["_id"])
+                await TaskSchedulerService.schedule_lead_sequence(
+                    user_id=campaign["user_id"],
+                    campaign_id=campaign["id"],
+                    lead_id=lead_id,
+                    sequence_steps=steps
+                )
+                await db.leads.update_one(
+                    {"_id": lead["_id"]},
+                    {"$set": {"status": "contacted", "updated_at": now}}
+                )
+                scheduled_count += 1
+                
+    return {"status": "ok", "scheduled_leads": scheduled_count}
+
+
+@celery_app.task(name="app.tasks.campaign_tasks.process_scheduled_campaign_tasks")
+def process_scheduled_campaign_tasks_task():
+    """Celery task wrapper to process scheduled campaign tasks."""
+    import asyncio
+    from app.services.task_scheduler_service import TaskSchedulerService
+    
+    logger.info("Celery Task: Processing scheduled campaign tasks...")
+    
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    loop.run_until_complete(TaskSchedulerService.process_pending_tasks())
+    logger.info("Celery Task: Scheduled campaign tasks processing completed.")
+    return {"status": "ok"}
