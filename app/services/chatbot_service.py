@@ -210,18 +210,27 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             attachments = []
             if _uploaded_files:
                 attachments = _uploaded_files
-            
+
+            # The LLM often serialises sequence_steps as a JSON string instead of
+            # a list.  Parse it here so Pydantic's validator receives a proper list.
+            raw_steps = args.get("sequence_steps")
+            if isinstance(raw_steps, str):
+                try:
+                    raw_steps = json.loads(raw_steps)
+                except (json.JSONDecodeError, ValueError):
+                    raw_steps = None  # fall back to no steps
+
             campaign_data = CampaignCreate(
                 name=args["name"],
                 description=args.get("description", ""),
                 subject_template=args.get("subject_template", "Outreach"),
                 body_template=args.get("body_template", "Hi {{first_name}}"),
                 gmail_account_id=args.get("gmail_account_id", ""),
-                sequence_steps=args.get("sequence_steps"),
+                sequence_steps=raw_steps,
                 settings=CampaignSettings()
             )
             campaign = await create_campaign(user_id=user_id, data=campaign_data)
-            
+
             # Store attachments in campaign if any
             if attachments:
                 db_campaigns = db.campaigns
@@ -230,7 +239,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     {"$set": {"attachments": attachments}}
                 )
                 campaign["attachments"] = attachments
-            
+
             return json.dumps({"status": "success", "campaign": campaign}, default=str)
 
         elif name == "start_campaign":
@@ -977,38 +986,61 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
 
         elif name == "import_leads_from_file":
             from app.services.linkedin_csv_import_service import import_leads_from_csv, extract_linkedin_urls_from_text
-            
+
             file_url = args.get("file_url", "")
             campaign_id = await _resolve_campaign_id(args.get("campaign_id", ""), user_id, db)
-            
+
             if not file_url:
                 return json.dumps({"error": "file_url is required"})
-            
+
             try:
-                import httpx
-                async with httpx.AsyncClient(follow_redirects=True) as client:
-                    response = await client.get(file_url, timeout=30.0)
-                    if response.status_code != 200:
-                        return json.dumps({"error": f"Failed to fetch file: {response.status_code}"})
-                    
-                    file_content = response.content
-                    filename = file_url.split("/")[-1]
-                    
-                    result = await import_leads_from_csv(
-                        csv_content=file_content,
-                        user_id=user_id,
-                        campaign_id=campaign_id if campaign_id else None,
-                        create_leads=True,
-                    )
-                    
-                    return json.dumps({
-                        "status": "success",
-                        "filename": filename,
-                        "total_rows": result["total_rows"],
-                        "valid_leads": result["valid_leads"],
-                        "leads_created": result.get("leads_created", 0),
-                        "leads": result["leads"][:10] if result.get("leads") else [],
-                    }, default=str)
+                file_content = None
+                filename = file_url.split("/")[-1]
+
+                # ── Fast path: local /api/files/<file_id>/download URL ──────────
+                # Avoid HTTP self-request (deadlock on single-threaded uvicorn).
+                # Extract file_id from the URL and read directly from disk via DB.
+                import re as _re
+                _local_match = _re.search(r"/api/files/([^/]+)/download", file_url)
+                if _local_match:
+                    _file_id = _local_match.group(1)
+                    _file_doc = await db.uploaded_files.find_one({"id": _file_id})
+                    if _file_doc and _file_doc.get("file_path"):
+                        import os as _os
+                        _path = _file_doc["file_path"]
+                        if _os.path.exists(_path):
+                            with open(_path, "rb") as _f:
+                                file_content = _f.read()
+                            filename = _file_doc.get("original_filename", filename)
+                        else:
+                            return json.dumps({"error": f"Uploaded file not found on disk: {_path}"})
+                    else:
+                        return json.dumps({"error": f"File record not found for id: {_file_id}"})
+
+                # ── Fallback: external URL (e.g. Google Drive, S3) ──────────────
+                if file_content is None:
+                    import httpx
+                    async with httpx.AsyncClient(follow_redirects=True) as client:
+                        response = await client.get(file_url, timeout=30.0)
+                        if response.status_code != 200:
+                            return json.dumps({"error": f"Failed to fetch file: {response.status_code}"})
+                        file_content = response.content
+
+                result = await import_leads_from_csv(
+                    csv_content=file_content,
+                    user_id=user_id,
+                    campaign_id=campaign_id if campaign_id else None,
+                    create_leads=True,
+                )
+
+                return json.dumps({
+                    "status": "success",
+                    "filename": filename,
+                    "total_rows": result["total_rows"],
+                    "valid_leads": result["valid_leads"],
+                    "leads_created": result.get("leads_created", 0),
+                    "leads": result["leads"][:10] if result.get("leads") else [],
+                }, default=str)
             except Exception as e:
                 logger.exception("Error importing leads from file")
                 return json.dumps({"error": str(e)})
