@@ -1,0 +1,35 @@
+=== DEEP BHAGAT REPLY ===
+{
+  "_id": "6a328cb0d69c5fc1f08c9d8c",
+  "id": "f3ed1bec-0466-4ff9-8aad-e486a797827d",
+  "email_id": "a236de3c-ab39-4769-97e3-4b1b36b16671",
+  "campaign_id": "36659b51-98fe-4411-9d53-2d33cd4a1e1f",
+  "lead_id": "8f698545-d6da-427c-bda5-ad09f78ffcff",
+  "gmail_message_id": "19ed5754709024f5",
+  "gmail_thread_id": "19ed57434d59399e",
+  "from_email": "Deep Bhagat <deepbhagat.electrawireless@gmail.com>",
+  "subject": "Re: One last try",
+  "snippet": "Yes I got it Keep sending mails \ud83d\ude42 On Wed, 17 Jun 2026, 5:30 pm Sriharshith0511, &lt;sriharshith0511@gmail.com&gt; wrote: Hi Deep Bhagat, I hope this finds you well. I&#39;ll respect your time and won",
+  "body": "",
+  "classification": "interested",
+  "sentiment": "positive",
+  "received_at": "2026-06-17 12:01:52.878000",
+  "created_at": "2026-06-17 12:01:52.878000",
+  "classification_reasoning": null,
+  "confidence_score": null,
+  "lead_score_delta": 15,
+  "gmail_account_id": "f5328139-8209-4e65-be7a-2874d533852f",
+  "classification_sentiment": "positive",
+  "draft_response": {
+    "subject": "Re: Re: One last try",
+    "body_text": "",
+    "body_html": "",
+    "generated_at": "2026-06-25 18:32:00.469000",
+    "status": "pending",
+    "classification": {
+      "classification": "interested",
+      "sentiment": "positive",
+      "lead_score_delta": 15
+    }
+  }
+}
