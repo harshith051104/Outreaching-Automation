@@ -1952,7 +1952,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         })
         return campaign["id"] if campaign else None
 
-    # 1. Create Campaign
+    # 1. Create Campaign (multi-step: create → import leads → start if requested in same message)
     create_match = re.search(
         r"create\s+(?:a\s+)?(?:new\s+)?campaign\s+(?:named|called)?\s*['\"]?([\w\s\-\.]+?)['\"]?(?:\s+with|\s+subject|\.|\s*$)",
         message, re.IGNORECASE
@@ -1970,9 +1970,38 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         res_dict = json.loads(res)
         if "error" in res_dict:
             return {"response": f"Failed to create campaign '{name}': {res_dict['error']}", "actions_taken": []}
+
+        campaign_id = res_dict["campaign"]["id"]
+        actions_taken = [{"tool": "create_campaign", "arguments": args}]
+        steps_done = [f"✅ Created campaign **{name}** (ID: `{campaign_id}`)"]
+
+        # Import leads from Google Sheet / CSV URL if present in same message
+        sheet_url_match = re.search(
+            r"(https?://docs\.google\.com/spreadsheets/[^\s]+|https?://[^\s]+\.csv[^\s]*)",
+            message, re.IGNORECASE
+        )
+        if sheet_url_match:
+            sheet_url = sheet_url_match.group(1).strip()
+            import_args = {"file_url": sheet_url, "campaign_id": campaign_id}
+            import_res = await execute_tool("import_leads", import_args, user_id)
+            try:
+                import_dict = json.loads(import_res)
+                imported = import_dict.get("imported_count") or import_dict.get("count") or import_dict.get("total") or 0
+                steps_done.append(f"✅ Imported **{imported} leads** from the provided sheet")
+                actions_taken.append({"tool": "import_leads", "arguments": import_args})
+            except Exception:
+                steps_done.append("⚠️ Lead import attempted — check campaign leads page to confirm")
+
+        # Start the campaign if the message also requests it
+        wants_start = re.search(r"\b(start|launch|activate|begin)\b", message, re.IGNORECASE)
+        if wants_start:
+            await execute_tool("start_campaign", {"campaign_id": campaign_id}, user_id)
+            steps_done.append(f"✅ Campaign **{name}** started — emails are being scheduled")
+            actions_taken.append({"tool": "start_campaign", "arguments": {"campaign_id": campaign_id}})
+
         return {
-            "response": f"Created campaign **{name}** (ID: {res_dict['campaign']['id']}).",
-            "actions_taken": [{"tool": "create_campaign", "arguments": args}]
+            "response": "\n".join(steps_done),
+            "actions_taken": actions_taken
         }
 
     # 2. Start Campaign
@@ -2555,7 +2584,7 @@ You have access to the following Workers/Tools:
 3. "pause_campaign": Pauses a running campaign. Arguments: {campaign_id: Optional[str]}
 4. "update_campaign": Updates campaign fields or templates. Arguments: {campaign_id: Optional[str], subject_template: Optional[str], body_template: Optional[str]}
 5. "import_leads": Imports leads from a CSV or Google Sheets URL. Arguments: {campaign_id: Optional[str], file_url: Optional[str]}
-6. "generate_batch_content": Generates all email templates, subjects, follow-up stages, and LinkedIn notes in one batch. Arguments: {campaign_name: str, description: str, vision: Optional[str], products: Optional[str], opportunity: Optional[str], impact: Optional[str], cta: Optional[str]}
+6. "generate_batch_content": Generates all email templates, subjects, and email follow-up stages in one batch. Arguments: {campaign_name: str, description: str, vision: Optional[str], products: Optional[str], opportunity: Optional[str], impact: Optional[str], cta: Optional[str]}
 7. "sync_google_sheet": Synchronizes campaign leads with Google Sheets. Arguments: {campaign_id: Optional[str]}
 8. "notify_team": Sends a workspace notification. Arguments: {type: str, title: str, message: str}
 9. "log_timeline": Records an event on the activity timeline. Arguments: {event_type: str, description: str}
