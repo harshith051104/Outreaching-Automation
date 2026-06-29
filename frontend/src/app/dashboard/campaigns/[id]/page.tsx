@@ -107,13 +107,10 @@ export default function CampaignDetailPage() {
       
       if (!isPoll || !hasLoadedInitial || forceSyncSequence) {
         setSequenceSteps(campaignData.sequence_steps || [
-          { step_number: 1, channel: "linkedin", delay_days: 0, body_template: "Hi {{first_name}}, I'd like to connect." },
-          { step_number: 2, channel: "email", delay_days: 3 },
-          { step_number: 3, channel: "linkedin", delay_days: 6 },
-          { step_number: 4, channel: "email", delay_days: 10 },
-          { step_number: 5, channel: "linkedin", delay_days: 15 },
-          { step_number: 6, channel: "email", delay_days: 20 },
-          { step_number: 7, channel: "email", delay_days: 28 }
+          { step_number: 1, channel: "email", delay_days: 3 },
+          { step_number: 2, channel: "email", delay_days: 10 },
+          { step_number: 3, channel: "email", delay_days: 20 },
+          { step_number: 4, channel: "email", delay_days: 28 }
         ]);
         setSubjectTemplate(campaignData.subject_template || "");
         setBodyTemplate(campaignData.body_template || "");
@@ -552,20 +549,13 @@ export default function CampaignDetailPage() {
             {/* Quick Add Step Controls */}
             <div className="border-t pt-4 space-y-2">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Add Sequence Step</span>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => handleAddStep("email")}
                   className="px-2 py-1.5 border border-slate-200 bg-slate-50 hover:bg-slate-100 text-[10px] font-bold rounded-lg text-slate-800 transition-all text-center"
                 >
                   + Email Step
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAddStep("linkedin")}
-                  className="px-2 py-1.5 border border-slate-200 bg-slate-50 hover:bg-slate-100 text-[10px] font-bold rounded-lg text-slate-800 transition-all text-center"
-                >
-                  + LinkedIn Step
                 </button>
                 <button
                   type="button"
