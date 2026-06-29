@@ -299,32 +299,52 @@ async def _campaign_processor_loop():
                                len(pending_leads), campaign.get("name"))
 
                     if campaign.get("subject_template") or campaign.get("body_template"):
-                        steps = campaign.get("sequence_steps") or [
-                            {"step_number": 1, "channel": "email", "delay_days": 0,
-                             "subject_template": campaign.get("subject_template") or "Quick question",
-                             "body_template": campaign.get("body_template") or "Hi {{first_name}},"}
-                        ]
+                        main_email = {
+                            "step_number": 1,
+                            "channel": "email",
+                            "delay_days": 0,
+                            "subject_template": campaign.get("subject_template") or "Quick question",
+                            "body_template": campaign.get("body_template") or "Hi {{first_name}},"
+                        }
+                        steps = [main_email]
+                        custom_steps = campaign.get("sequence_steps") or []
+                        email_only_steps = [s for s in custom_steps if s.get("channel", "email").lower() != "linkedin"]
+                        for idx, step in enumerate(email_only_steps):
+                            steps.append({
+                                "step_number": idx + 2,
+                                "channel": "email",
+                                "delay_days": (step.get("delay_days") or 0) + 3,
+                                "subject_template": step.get("subject_template") or "",
+                                "body_template": step.get("body_template") or ""
+                            })
                     else:
-                        steps = campaign.get("sequence_steps") or [
-                            {"step_number": 1, "channel": "linkedin", "delay_days": 0,
-                             "body_template": "Hi {{first_name}}, I'd like to connect."},
-                            {"step_number": 2, "channel": "email", "delay_days": 3,
-                             "subject_template": campaign.get("subject_template") or "Quick question",
-                             "body_template": campaign.get("body_template") or "Hi {{first_name}},"},
-                            {"step_number": 3, "channel": "linkedin", "delay_days": 6,
-                             "body_template": "Hi {{first_name}}, I sent you a message earlier. Would love to connect."},
-                            {"step_number": 4, "channel": "email", "delay_days": 10,
-                             "subject_template": "Re: " + (campaign.get("subject_template") or "Quick question"),
-                             "body_template": "Hi {{first_name}},\n\nJust following up on my previous message. Any thoughts?"},
-                            {"step_number": 5, "channel": "linkedin", "delay_days": 15,
-                             "body_template": "Hi {{first_name}}, great post! Just engaged with it."},
-                            {"step_number": 6, "channel": "email", "delay_days": 20,
-                             "subject_template": "{{company}} + {{sender_name}}",
-                             "body_template": "Hi {{first_name}},\n\nI noticed {{company}} has been growing rapidly. We've helped similar companies achieve great results.\n\nWould love to share how we could help.\n\nBest"},
-                            {"step_number": 7, "channel": "email", "delay_days": 28,
-                             "subject_template": "One last try",
-                             "body_template": "Hi {{first_name}},\n\nI hope this finds you well. I'll respect your time and won't reach out again after this.\n\nBest"}
-                        ]
+                        custom_steps = campaign.get("sequence_steps") or []
+                        email_only_steps = [s for s in custom_steps if s.get("channel", "email").lower() != "linkedin"]
+                        if email_only_steps:
+                            steps = []
+                            for idx, step in enumerate(email_only_steps):
+                                steps.append({
+                                    "step_number": idx + 1,
+                                    "channel": "email",
+                                    "delay_days": step.get("delay_days") or 0,
+                                    "subject_template": step.get("subject_template") or "",
+                                    "body_template": step.get("body_template") or ""
+                                })
+                        else:
+                            steps = [
+                                {"step_number": 1, "channel": "email", "delay_days": 0,
+                                 "subject_template": campaign.get("subject_template") or "Quick question",
+                                 "body_template": campaign.get("body_template") or "Hi {{first_name}},"},
+                                {"step_number": 2, "channel": "email", "delay_days": 3,
+                                 "subject_template": "Re: " + (campaign.get("subject_template") or "Quick question"),
+                                 "body_template": "Hi {{first_name}},\n\nJust following up on my previous message. Any thoughts?"},
+                                {"step_number": 3, "channel": "email", "delay_days": 10,
+                                 "subject_template": "{{company}} + {{sender_name}}",
+                                 "body_template": "Hi {{first_name}},\n\nI noticed {{company}} has been growing rapidly. We've helped similar companies achieve great results.\n\nWould love to share how we could help.\n\nBest"},
+                                {"step_number": 4, "channel": "email", "delay_days": 20,
+                                 "subject_template": "One last try",
+                                 "body_template": "Hi {{first_name}},\n\nI hope this finds you well. I'll respect your time and won't reach out again after this.\n\nBest"}
+                            ]
 
                     for lead in pending_leads:
                         lead_id = lead.get("id") or str(lead["_id"])
