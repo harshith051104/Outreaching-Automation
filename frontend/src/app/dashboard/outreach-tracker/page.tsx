@@ -407,6 +407,26 @@ export default function OutreachTrackerPage() {
     }
   };
 
+  // Handle Team User Deletion
+  const handleDeleteUser = async (userId: string, userName: string) => {
+    if (window.confirm(`Are you sure you want to remove team member "${userName}"?`)) {
+      try {
+        await deleteTrackerUser(userId);
+        showToast("success", `User "${userName}" has been successfully removed.`);
+        loadInitialData();
+        if (selectedUserTab === userName) {
+          selectTab("All");
+        }
+        if (editingUser?.id === userId) {
+          setEditingUser(null);
+          setUserForm({ name: "", display_name: "", email: "", role: "member", password: "" });
+        }
+      } catch (err: any) {
+        showToast("error", err.response?.data?.detail || "Failed to remove team member.");
+      }
+    }
+  };
+
   // Add Lead (Row insert)
   const handleAddLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -813,18 +833,7 @@ export default function OutreachTrackerPage() {
                       onClick={async (e) => {
                         e.stopPropagation();
                         setActiveUserDropdownId(null);
-                        if (window.confirm(`Are you sure you want to delete user "${userName}"?`)) {
-                          try {
-                            await deleteTrackerUser(u.id);
-                            showToast("success", `User "${userName}" deleted successfully.`);
-                            loadInitialData();
-                            if (selectedUserTab === userName) {
-                              selectTab("All");
-                            }
-                          } catch (err: any) {
-                            showToast("error", err.response?.data?.detail || "Failed to delete user.");
-                          }
-                        }
+                        await handleDeleteUser(u.id, userName);
                       }}
                       className="flex items-center gap-1.5 w-full text-left px-3 py-2 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 text-xs font-bold cursor-pointer"
                     >
@@ -918,9 +927,22 @@ export default function OutreachTrackerPage() {
                             {u.role || "member"}
                           </span>
                         </span>
-                        <span className="text-[11px] text-slate-500 font-mono truncate max-w-[170px]">{u.email}</span>
+                        <span className="text-[11px] text-slate-500 font-mono truncate max-w-[150px]">{u.email}</span>
                       </div>
-                      <ChevronRight size={14} className="text-slate-500" />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteUser(u.id, u.display_name || u.name);
+                          }}
+                          className="p-1.5 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 rounded-lg transition-all cursor-pointer"
+                          title="Remove user"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                        <ChevronRight size={14} className="text-slate-500 flex-shrink-0" />
+                      </div>
                     </div>
                   ))}
                 </div>
