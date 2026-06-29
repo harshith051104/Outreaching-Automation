@@ -320,11 +320,23 @@ async def _process_active_campaigns_async() -> dict:
                         len(pending_leads), campaign.get("name"))
             
             if campaign.get("subject_template") or campaign.get("body_template"):
-                steps = campaign.get("sequence_steps") or [
-                    {"step_number": 1, "channel": "email", "delay_days": 0,
-                     "subject_template": campaign.get("subject_template") or "Quick question",
-                     "body_template": campaign.get("body_template") or "Hi {{first_name}},"}
-                ]
+                main_email = {
+                    "step_number": 1,
+                    "channel": "email",
+                    "delay_days": 0,
+                    "subject_template": campaign.get("subject_template") or "Quick question",
+                    "body_template": campaign.get("body_template") or "Hi {{first_name}},"
+                }
+                steps = [main_email]
+                custom_steps = campaign.get("sequence_steps") or []
+                for step in custom_steps:
+                    steps.append({
+                        "step_number": (step.get("step_number") or 1) + 1,
+                        "channel": step.get("channel", "email"),
+                        "delay_days": (step.get("delay_days") or 0) + 3,
+                        "subject_template": step.get("subject_template") or "",
+                        "body_template": step.get("body_template") or ""
+                    })
             else:
                 steps = campaign.get("sequence_steps") or [
                     {"step_number": 1, "channel": "linkedin", "delay_days": 0,
