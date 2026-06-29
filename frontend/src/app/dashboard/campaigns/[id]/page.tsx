@@ -128,7 +128,8 @@ export default function CampaignDetailPage() {
   };
 
 
-  const handleAddStep = (channel: "email" | "linkedin" | "task") => {
+  // LINKEDIN DISABLED — change back to "email" | "linkedin" | "task" to re-enable LinkedIn steps
+  const handleAddStep = (channel: "email" | /* "linkedin" | */ "task") => {
     setSequenceSteps(prev => {
       const nextStepNum = prev.length + 1;
       const lastStep = prev[prev.length - 1];
@@ -504,6 +505,7 @@ export default function CampaignDetailPage() {
                       </div>
                     )}
 
+                    {/* LINKEDIN DISABLED — uncomment block below to re-enable LinkedIn message template editor
                     {step.channel === "linkedin" && (
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">LinkedIn Message Template</label>
@@ -522,6 +524,7 @@ export default function CampaignDetailPage() {
                         />
                       </div>
                     )}
+                    */}
 
                     {step.channel === "task" && (
                       <div className="space-y-1">

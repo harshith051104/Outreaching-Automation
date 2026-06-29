@@ -158,18 +158,10 @@ class TaskSchedulerService:
             try:
                 if channel == "email":
                     await TaskSchedulerService._execute_email_task(task, lead)
+                # LINKEDIN DISABLED — change elif to execute LinkedIn tasks when re-enabling
                 elif channel == "linkedin":
-                    logger.info("Ignoring LinkedIn task %s: Focusing on Gmail outreach only.", task_id)
-                    try:
-                        from app.services.state_machine_hooks import log_activity_timeline
-                        await log_activity_timeline(
-                            db,
-                            lead_id=lead_id,
-                            activity_type="linkedin_skipped",
-                            note_text="LinkedIn task skipped (Gmail outreach priority active)"
-                        )
-                    except Exception:
-                        pass
+                    logger.info("Skipping LinkedIn task %s: LinkedIn outreach is currently disabled.", task_id)
+                    # To re-enable: call await TaskSchedulerService._execute_linkedin_task(task, lead) here
                 elif channel == "call":
                     await TaskSchedulerService._execute_call_reminder(task, lead)
                 elif channel == "task":

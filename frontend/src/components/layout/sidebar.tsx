@@ -14,7 +14,7 @@ import {
   BarChart3,
   Bot,
   Bell,
-  Linkedin,
+  // Linkedin, // LINKEDIN DISABLED — uncomment to re-enable LinkedIn nav
   BookOpen,
   FileText,
   Mail,
@@ -129,7 +129,8 @@ export default function Sidebar() {
     {
       label: "Channels",
       items: [
-        { href: "/dashboard/linkedin", label: "LinkedIn", icon: Linkedin },
+        // LINKEDIN DISABLED — uncomment to re-enable LinkedIn channel
+        // { href: "/dashboard/linkedin", label: "LinkedIn", icon: Linkedin },
         { href: "/dashboard/gmail", label: "Gmail", icon: Mail },
       ]
     },
