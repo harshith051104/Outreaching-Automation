@@ -158,38 +158,53 @@ export default function CampaignsPage() {
       </div>
 
       {/* Status Filter Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
-        {FILTER_TABS.map((tab) => {
-          const isActive = filter === tab;
-          const cfg = STATUS_CONFIG[tab] || STATUS_CONFIG.draft;
-          return (
-            <button key={tab} onClick={() => setFilter(tab)} style={{
-              display: 'flex', alignItems: 'center', gap: '7px',
-              padding: '8px 16px', borderRadius: '10px',
-              background: isActive ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'var(--card-bg)',
-              border: isActive ? 'none' : '1px solid var(--card-border)',
-              color: isActive ? 'white' : 'var(--sidebar-text-muted)',
-              fontSize: '13px', fontWeight: '600', cursor: 'pointer',
-              boxShadow: isActive ? '0 4px 12px rgba(124,92,255,0.3)' : 'var(--card-shadow)',
-              transition: 'all 0.2s ease',
-            }}>
-              {tab !== 'all' && (
-                <span style={{
-                  width: '7px', height: '7px', borderRadius: '50%',
-                  background: isActive ? 'rgba(255,255,255,0.8)' : cfg.dot,
-                  flexShrink: 0,
-                }} />
-              )}
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-              <span style={{
-                padding: '1px 7px', borderRadius: '999px', fontSize: '11px', fontWeight: '700',
-                background: isActive ? 'rgba(255,255,255,0.2)' : 'var(--sidebar-hover)',
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {FILTER_TABS.map((tab) => {
+            const isActive = filter === tab;
+            const cfg = STATUS_CONFIG[tab] || STATUS_CONFIG.draft;
+            return (
+              <button key={tab} onClick={() => setFilter(tab)} style={{
+                display: 'flex', alignItems: 'center', gap: '7px',
+                padding: '8px 16px', borderRadius: '10px',
+                background: isActive ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'var(--card-bg)',
+                border: isActive ? 'none' : '1px solid var(--card-border)',
+                color: isActive ? 'white' : 'var(--sidebar-text-muted)',
+                fontSize: '13px', fontWeight: '600', cursor: 'pointer',
+                boxShadow: isActive ? '0 4px 12px rgba(124,92,255,0.3)' : 'var(--card-shadow)',
+                transition: 'all 0.2s ease',
               }}>
-                {statusCounts[tab as FilterTab] ?? statusCounts.all}
-              </span>
-            </button>
-          );
-        })}
+                {tab !== 'all' && (
+                  <span style={{
+                    width: '7px', height: '7px', borderRadius: '50%',
+                    background: isActive ? 'rgba(255,255,255,0.8)' : cfg.dot,
+                    flexShrink: 0,
+                  }} />
+                )}
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                <span style={{
+                  padding: '1px 7px', borderRadius: '999px', fontSize: '11px', fontWeight: '700',
+                  background: isActive ? 'rgba(255,255,255,0.2)' : 'var(--sidebar-hover)',
+                }}>
+                  {statusCounts[tab as FilterTab] ?? statusCounts.all}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <button onClick={loadCampaigns} style={{
+          display: 'inline-flex', alignItems: 'center', gap: '6px',
+          padding: '8px 16px', borderRadius: '10px',
+          background: 'var(--card-bg)',
+          border: '1px solid var(--card-border)',
+          color: 'var(--sidebar-text-muted)',
+          fontSize: '13px', fontWeight: '600', cursor: 'pointer',
+          boxShadow: 'var(--card-shadow)',
+          transition: 'all 0.2s ease',
+        }}>
+          <RotateCcw size={14} /> Refresh
+        </button>
       </div>
 
       {/* Campaigns List */}

@@ -46,18 +46,20 @@ async def main():
         try:
             return _decrypt_cookies(session_doc["cookies_encrypted"])
         except (ValueError, Exception) as exc:
+            import traceback
             logger.error(
                 "Cookie decryption failed for user %s — marking session as expired. Reason: %s",
                 args.user_id, exc,
             )
-            await db.linkedin_sessions.update_one(
-                {"user_id": args.user_id},
-                {"$set": {
-                    "status": "expired",
-                    "updated_at": datetime.now(timezone.utc),
-                    "error": "Encryption key changed. Please re-connect your LinkedIn account.",
-                }},
-            )
+            try:
+                os.makedirs("scratch", exist_ok=True)
+                with open("scratch/decrypt_error.txt", "w", encoding="utf-8") as f:
+                    f.write(f"Exception: {str(exc)}\n")
+                    f.write(traceback.format_exc())
+            except Exception:
+                pass
+            # Keep existing status, do not auto-logout on decryption failures
+            logger.warning("Decryption failed. Keeping existing status to prevent auto-logout.")
             return None
 
     try:
@@ -112,9 +114,9 @@ async def main():
                     cookies = json.loads(cookies_json)
                     from app.services.linkedin_outreach_service import _validate_session_pw
                     try:
-                        val_res = await asyncio.wait_for(_validate_session_pw(cookies), timeout=30)
+                        val_res = await asyncio.wait_for(_validate_session_pw(cookies), timeout=60)
                     except asyncio.TimeoutError:
-                        logger.warning("validate_session timed out after 30s")
+                        logger.warning("validate_session timed out after 60s")
                         val_res = {"valid": False, "error": "Session validation timed out"}
                     is_valid = val_res.get("valid", False) if isinstance(val_res, dict) else val_res
                     if is_valid:
@@ -134,11 +136,15 @@ async def main():
                         )
                         result = {"valid": True, "status": "connected"}
                     else:
-                        await db.linkedin_sessions.update_one(
-                            {"user_id": args.user_id},
-                            {"$set": {"status": "expired"}}
-                        )
-                        result = {"valid": False, "status": "expired"}
+                        error_msg = val_res.get("error", "") if isinstance(val_res, dict) else ""
+                        is_timeout = "timeout" in error_msg.lower() or "navigation" in error_msg.lower()
+                        if is_timeout:
+                            logger.warning("LinkedIn validation failed due to transient timeout. Keeping existing status.")
+                            result = {"valid": False, "status": session.get("status", "connected"), "error": error_msg}
+                        else:
+                            # Keep existing status, do not auto-logout on validation failures
+                            logger.warning("LinkedIn validation failed. Keeping existing status to prevent auto-logout.")
+                            result = {"valid": False, "status": session.get("status", "connected")}
 
         elif args.action == "scrape_profile":
             if not session or not session.get("cookies_encrypted"):
@@ -159,10 +165,7 @@ async def main():
                         logger.warning("scrape_profile timed out after 60s for %s", args.linkedin_url)
                         res = {"success": False, "error": "Profile scrape timed out after 60s"}
                     if isinstance(res, dict) and "error" in res and "Session expired" in res.get("error", ""):
-                        await db.linkedin_sessions.update_one(
-                            {"user_id": args.user_id},
-                            {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
-                        )
+                        logger.warning("Session expired detected in scrape_profile. Keeping existing status to prevent auto-logout.")
                     if isinstance(res, dict) and res.get("error_screenshot_path"):
                         scr_path = res.pop("error_screenshot_path")
                         try:
@@ -206,10 +209,7 @@ async def main():
                         logger.warning("send_connection_request timed out after 300s for %s", args.linkedin_url)
                         res = {"success": False, "error": "Connection request timed out after 300s. LinkedIn may be slow or blocked."}
                     if not res.get("success") and "Session expired" in res.get("error", ""):
-                        await db.linkedin_sessions.update_one(
-                            {"user_id": args.user_id},
-                            {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
-                        )
+                        logger.warning("Session expired detected in send_connection_request. Keeping existing status to prevent auto-logout.")
                     if isinstance(res, dict) and res.get("error_screenshot_path"):
                         scr_path = res.pop("error_screenshot_path")
                         try:
@@ -253,10 +253,7 @@ async def main():
                         logger.warning("follow_profile timed out after 60s for %s", args.linkedin_url)
                         res = {"success": False, "error": "Follow profile timed out after 60s"}
                 if not res.get("success") and "Session expired" in res.get("error", ""):
-                    await db.linkedin_sessions.update_one(
-                        {"user_id": args.user_id},
-                        {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
-                    )
+                    logger.warning("Session expired detected in follow_profile. Keeping existing status to prevent auto-logout.")
                 if isinstance(res, dict) and res.get("error_screenshot_path"):
                     scr_path = res.pop("error_screenshot_path")
                     try:
@@ -300,10 +297,7 @@ async def main():
                     logger.warning("send_message timed out after 60s for %s", args.linkedin_url)
                     res = {"success": False, "error": "Send message timed out after 60s"}
                 if not res.get("success") and "Session expired" in res.get("error", ""):
-                    await db.linkedin_sessions.update_one(
-                        {"user_id": args.user_id},
-                        {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
-                    )
+                    logger.warning("Session expired detected in send_message. Keeping existing status to prevent auto-logout.")
                 if isinstance(res, dict) and res.get("error_screenshot_path"):
                     scr_path = res.pop("error_screenshot_path")
                     try:
@@ -354,10 +348,7 @@ async def main():
                     logger.warning("send_message_by_name timed out after 90s for '%s'", person_name)
                     res = {"success": False, "error": "Send message by name timed out after 90s"}
                 if not res.get("success") and "Session expired" in res.get("error", ""):
-                    await db.linkedin_sessions.update_one(
-                        {"user_id": args.user_id},
-                        {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
-                    )
+                    logger.warning("Session expired detected in send_message_by_name. Keeping existing status to prevent auto-logout.")
                 if isinstance(res, dict) and res.get("error_screenshot_path"):
                     scr_path = res.pop("error_screenshot_path")
                     try:
@@ -398,15 +389,7 @@ async def main():
                             timeout=60
                         )
                         if isinstance(res, dict) and "error" in res and "Session expired" in res.get("error", ""):
-                            logger.warning("Session expired detected in get_pending_invitations. Marking session as expired.")
-                            await db.linkedin_sessions.update_one(
-                                {"user_id": args.user_id},
-                                {"$set": {
-                                    "status": "expired",
-                                    "updated_at": datetime.now(timezone.utc),
-                                    "error": "LinkedIn session expired. Please re-connect via Settings → Integrations."
-                                }}
-                            )
+                            logger.warning("Session expired detected in get_pending_invitations. Keeping existing status to prevent auto-logout.")
                         result = res
                     except asyncio.TimeoutError:
                         logger.warning("get_pending_invitations timed out after 60s")

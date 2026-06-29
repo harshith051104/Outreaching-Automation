@@ -53,14 +53,6 @@ export const PROVIDER_FIELDS: Record<string, { key: string; label: string; place
       isTextarea: true,
     },
   ],
-  google_oauth_credentials: [
-    { key: "client_id", label: "Google Client ID", placeholder: "940350711002-....apps.googleusercontent.com" },
-    { key: "client_secret", label: "Google Client Secret", placeholder: "GOCSPX-..." },
-  ],
-  qdrant: [
-    { key: "url", label: "Qdrant URL", placeholder: "http://localhost:6333 or https://cluster.qdrant.tech" },
-    { key: "api_key", label: "Qdrant API Key (Optional for local)", placeholder: "api-key..." },
-  ],
 };
 
 export const PROVIDER_ICONS: Record<string, string> = {
@@ -72,8 +64,6 @@ export const PROVIDER_ICONS: Record<string, string> = {
   linkedin_session: "💼",
   google_sheets: "📊",
   gmail_oauth: "📧",
-  google_oauth_credentials: "🔐",
-  qdrant: "🗄️",
 };
 
 /**

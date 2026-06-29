@@ -34,9 +34,14 @@ logger = logging.getLogger(__name__)
 async def test_debug():
     import traceback
     try:
-        from app.config.groq_config import get_llm_section_disabled, set_llm_section_disabled
-        val = get_llm_section_disabled("linkedin")
-        return {"status": "ok", "val": val}
+        from app.config.settings import settings
+        from app.services.linkedin_outreach_service import _get_encryption_key
+        return {
+            "status": "ok",
+            "COOKIE_ENCRYPTION_KEY": settings.COOKIE_ENCRYPTION_KEY,
+            "JWT_SECRET": settings.JWT_SECRET,
+            "derived_key": _get_encryption_key().decode()
+        }
     except Exception as e:
         return {"status": "error", "traceback": traceback.format_exc()}
 

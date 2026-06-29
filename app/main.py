@@ -228,11 +228,11 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to initialize LLM toggle state from database: %s", exc)
 
     # Pre-warm active LinkedIn sessions in background
-    try:
-        from app.services.linkedin_session_manager import restore_sessions_on_startup
-        asyncio.create_task(restore_sessions_on_startup())
-    except Exception as exc:
-        logger.error(f"Failed to start pre-warming LinkedIn sessions: {exc}")
+    # try:
+    #     from app.services.linkedin_session_manager import restore_sessions_on_startup
+    #     asyncio.create_task(restore_sessions_on_startup())
+    # except Exception as exc:
+    #     logger.error(f"Failed to start pre-warming LinkedIn sessions: {exc}")
 
     logger.info("Application started at %s", datetime.now(timezone.utc).isoformat())
 
@@ -253,11 +253,11 @@ async def lifespan(app: FastAPI):
         pass
 
     # Clean up warm sessions on shutdown
-    try:
-        from app.services.linkedin_session_manager import close_all_active_sessions
-        await close_all_active_sessions()
-    except Exception as exc:
-        logger.error(f"Error during shutdown of LinkedIn sessions: {exc}")
+    # try:
+    #     from app.services.linkedin_session_manager import close_all_active_sessions
+    #     await close_all_active_sessions()
+    # except Exception as exc:
+    #     logger.error(f"Error during shutdown of LinkedIn sessions: {exc}")
 
     await mongodb_client.disconnect()
     logger.info("Application shutdown complete.")
@@ -359,25 +359,25 @@ async def _campaign_processor_loop():
             await refresh_all_campaign_analytics()
 
             # ── LinkedIn Monitoring ────────────────────────────────────
-            try:
-                from app.services.linkedin_connection_monitor import check_for_updates
-                await check_for_updates()
-            except Exception as li_exc:
-                logger.debug("LinkedIn monitoring skipped: %s", li_exc)
+            # try:
+            #     from app.services.linkedin_connection_monitor import check_for_updates
+            #     await check_for_updates()
+            # except Exception as li_exc:
+            #     logger.debug("LinkedIn monitoring skipped: %s", li_exc)
 
-            try:
-                from app.services.linkedin_scheduler_service import process_due_actions
-                # Process scheduled LinkedIn actions for users with active sessions
-                from app.config.mongodb_config import get_database as _get_db
-                _db = await _get_db()
-                active_sessions = await _db.linkedin_sessions.find(
-                    {"status": "connected"}, {"user_id": 1, "_id": 0}
-                ).to_list(length=50)
-                for sess in active_sessions:
-                    if sess.get("user_id"):
-                        await process_due_actions(sess["user_id"])
-            except Exception as sched_exc:
-                logger.debug("LinkedIn scheduler skipped: %s", sched_exc)
+            # try:
+            #     from app.services.linkedin_scheduler_service import process_due_actions
+            #     # Process scheduled LinkedIn actions for users with active sessions
+            #     from app.config.mongodb_config import get_database as _get_db
+            #     _db = await _get_db()
+            #     active_sessions = await _db.linkedin_sessions.find(
+            #         {"status": "connected"}, {"user_id": 1, "_id": 0}
+            #     ).to_list(length=50)
+            #     for sess in active_sessions:
+            #         if sess.get("user_id"):
+            #             await process_due_actions(sess["user_id"])
+            # except Exception as sched_exc:
+            #     logger.debug("LinkedIn scheduler skipped: %s", sched_exc)
 
         except Exception as exc:
             logger.exception("Campaign processor loop error: %s", exc)

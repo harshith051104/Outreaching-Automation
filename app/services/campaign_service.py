@@ -136,9 +136,32 @@ async def get_campaigns(
 async def get_campaign(campaign_id: str, user_id: str) -> Dict:
     """Get a single campaign by ID, verifying ownership."""
     db = await get_database()
-    campaign = await db.campaigns.find_one({"id": campaign_id, "user_id": user_id}, {"_id": 0})
+    campaign = await db.campaigns.find_one({"id": campaign_id, "user_id": user_id})
     if not campaign:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
+    
+    # Self-healing: if campaign has name, migrate any leads saved with the campaign name to UUID
+    camp_name = campaign.get("name")
+    if camp_name:
+        import re
+        name_query = {
+            "user_id": user_id,
+            "campaign_id": {"$regex": f"^{re.escape(camp_name)}$", "$options": "i"}
+        }
+        matching_count = await db.leads.count_documents(name_query)
+        if matching_count > 0:
+            await db.leads.update_many(
+                name_query,
+                {"$set": {"campaign_id": campaign_id, "updated_at": datetime.now(timezone.utc)}}
+            )
+            total_leads = await db.leads.count_documents({"campaign_id": campaign_id})
+            await db.campaigns.update_one(
+                {"id": campaign_id},
+                {"$set": {"total_leads": total_leads}}
+            )
+            campaign["total_leads"] = total_leads
+
+    campaign.pop("_id", None)
     return campaign
 
 

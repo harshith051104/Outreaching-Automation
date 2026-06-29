@@ -24,19 +24,7 @@ _qdrant_client: QdrantClient | None = None
 
 
 def _get_qdrant_config_sync() -> tuple[str | None, str | None]:
-    """Fetch global Qdrant configuration from DB synchronously."""
-    from pymongo import MongoClient
-    try:
-        client = MongoClient(settings.MONGODB_URL, serverSelectionTimeoutMS=2000)
-        db = client[settings.MONGODB_DB_NAME]
-        doc = db["user_integrations"].find_one({"provider": "qdrant"})
-        if doc and "encrypted_data" in doc:
-            from app.utils.security import decrypt_dict
-            creds = decrypt_dict(doc["encrypted_data"])
-            if creds and creds.get("url"):
-                return creds.get("url"), creds.get("api_key")
-    except Exception:
-        pass
+    """Return Qdrant settings from environment only."""
     return settings.QDRANT_URL, settings.QDRANT_API_KEY
 
 

@@ -63,19 +63,8 @@ SCOPES = [
 
 
 async def _get_google_credentials(user_id: str | None = None) -> tuple[str, str]:
-    """Retrieve Google OAuth credentials from DB or fallback to env."""
-    from app.services.integrations_service import get_integration
-    
-    client_id = settings.GOOGLE_CLIENT_ID
-    client_secret = settings.GOOGLE_CLIENT_SECRET
-    
-    if user_id:
-        creds = await get_integration(user_id, "google_oauth_credentials")
-        if creds and creds.get("client_id") and creds.get("client_secret"):
-            client_id = creds["client_id"]
-            client_secret = creds["client_secret"]
-            
-    return client_id, client_secret
+    """Retrieve Google OAuth credentials. Only the .env values work."""
+    return settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET
 
 
 async def _build_flow(state: str | None = None, user_id: str | None = None) -> Flow:

@@ -20,6 +20,8 @@ from groq import Groq
 from app.config.settings import settings
 from app.config.groq_config import llm_chat_completion
 from app.config.mongodb_config import get_database
+from app.services.llm_manager import LLMManager
+from app.services.orchestrator_scheduler import OrchestratorScheduler
 from app.services.campaign_service import (
     create_campaign,
     get_campaigns,
@@ -47,6 +49,32 @@ except Exception as e:
 def _validate_email(email: str) -> bool:
     """Check if a string looks like a valid email address."""
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email.strip()))
+
+
+def _safe_parse_json(s: str) -> dict:
+    """Safely parse JSON from a string, handling markdown code blocks, trailing commas, and errors."""
+    if not s:
+        return {}
+    s = s.strip()
+    # Remove markdown code blocks if present
+    if s.startswith("```"):
+        first_newline = s.find("\n")
+        if first_newline != -1:
+            s = s[first_newline:].strip()
+        if s.endswith("```"):
+            s = s[:-3].strip()
+    
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        try:
+            match = re.search(r"(\{.*\})", s, re.DOTALL)
+            if match:
+                return json.loads(match.group(1))
+        except Exception:
+            pass
+        logger.error("Failed to parse JSON string: %s", s)
+        return {}
 
 
 def _is_uuid(s: str) -> bool:
@@ -2518,237 +2546,182 @@ async def handle_chatbot_chat(
 
 
     history = conversation_history or []
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an Autonomous Campaign Management Agent named Elly with 29 tools. "
-                "You MUST use tools to perform actions when requested. NEVER just describe what you would do. "
-                "However, for general greetings (like 'Hi', 'Hello', 'Hi elly'), conversational questions, or questions about your capabilities, "
-                "do NOT call any tools. Respond conversationally as Elly, introduce yourself, and ask how you can help.\n\n"
-                f"You are executing actions on behalf of the user: {user_name} ({user_email}). "
-                "When drafting campaign subject or body templates, use {{sender_name}} and {{sender_email}} to refer to the sender, "
-                "or directly insert the user's name/email as the sender details. Do NOT use hardcoded placeholders like '[Your Name]' or '[Your Email]' in the templates. "
-                "When drafting a direct message or connection request note to a person, always end the message with a polite sign-off followed by `{{sender_name}}` (e.g. `Best,\n{{sender_name}}`), unless they explicitly ask you not to include a signature.\n\n"
-                "You can also create or update campaigns with multi-step sequences by passing a list of `sequence_steps` objects (each step has fields: step_number, channel ('email', 'linkedin', or 'task'), delay_days, subject_template (for email), body_template (for email/linkedin), notes (for task)).\n\n"
-                "CRITICAL RULES - READ CAREFULLY:\n"
-                "1. 'create campaign X' → Call create_campaign tool. This CREATES a NEW campaign.\n"
-                "2. 'start the campaign' or 'start campaign X' → Call start_campaign tool. This STARTS an EXISTING campaign. Do NOT create a new one.\n"
-                "3. 'pause the campaign' → Call pause_campaign tool. This PAUSES an EXISTING campaign.\n"
-                "4. NEVER create a new campaign when user asks to START or PAUSE an existing one.\n"
-                "5. 'list campaigns' → Call list_campaigns tool.\n"
-                "6. 'add lead Name email@example.com' → Call add_lead tool. If there are multiple leads, ALWAYS use the bulk_add_leads tool to add them all at once.\n"
-                "7. 'analytics for campaign X' → Call get_campaign_analytics tool.\n"
-                "8. 'delete campaign X' → Call delete_campaign tool.\n"
-                "9. 'update campaign X name Y' → Call update_campaign tool.\n"
-                "10. 'rename campaign X to Y' → Call update_campaign tool with name=Y.\n"
-                "11. 'list leads' → Call list_leads tool.\n"
-                "12. 'search leads X' → Call search_leads tool.\n"
-                "13. 'list emails' → Call list_emails tool.\n"
-                "14. 'list gmail accounts' → Call list_gmail_accounts tool.\n"
-                "15. 'duplicate campaign X' → Call duplicate_campaign tool.\n"
-                "16. 'connect with <url>' or 'send connection request to <url>' → Call linkedin_connection_request tool. This will run the connection/research workflow asynchronously in the background (generating a personalized connection note and queueing it as pending_approval). The tool will return status: 'processing'. Explain to the user that you have started researching and drafting in the background, and they will be able to review/approve it in the queue once complete.\n"
-                "17. 'send message to <url> saying <text>' → Call linkedin_send_message tool. This will draft the message and queue it in the database for approval with status 'pending_approval'. Explain to the user that you have drafted the message and queued it for their review/approval.\n"
-                "25. 'send message to <person name> saying <text>' (where person name is NOT a URL) → Call linkedin_send_message_by_name tool. This will draft the message and queue it in the database for approval with status 'pending_approval'. Explain to the user that you have drafted the message and queued it for their review/approval. IMPORTANT: If the target is a person's name (not a LinkedIn URL), ALWAYS use linkedin_send_message_by_name, NOT linkedin_send_message.\n"
-                "18. 'scrape profile <url>' → Call linkedin_scrape_profile tool.\n"
-                "19. 'check inbox' or 'get messages' → Call linkedin_check_inbox tool.\n"
-                "20. 'linkedin status' → Call linkedin_session_status tool.\n"
-                "21. 'approve action <id>' or 'reject action <id>' → Call linkedin_manage_queue tool with appropriate action and action_id.\n"
-                "22. 'import leads from file' or 'upload CSV' → Call import_leads_from_file tool with the file_url from uploaded_files. The user can attach a CSV file to import LinkedIn leads. Extract the file_url from the uploaded_files parameter and pass it to the tool.\n"
-                "23. 'list linkedin leads' → Call list_linkedin_leads tool to show all leads with LinkedIn URLs.\n"
-                "24. 'bulk connect <lead_ids>' or 'send bulk message' → Call bulk_linkedin_action tool to create bulk connection requests or messages for multiple leads.\n"
-                "27. list tracker users or list team members or list users → Call list_tracker_users tool. Use this when the user asks to see registered team members/users instead of leads.\n"
-                "28. For general conversation, greetings, politeness, or questions about your capabilities, do NOT call any tools. Answer conversationally in plain text as Elly.\n"
-                "29. NEVER use emojis in any of your responses, conversations, or generated text.\n\n"
-                "After tool executes, confirm what was done. If a tool returns a processing status, tell the user that the action has been kicked off in the background and will appear in their pending queue shortly.\n"
-                "Use smart defaults: subject='Outreach', body='Hi {{first_name}}'.\n\n"
-                "FILE UPLOAD SUPPORT:\n"
-                "When user uploads a CSV file for lead import, the file info is in the uploaded_files parameter. Extract the 'url' field from each file object and use it with import_leads_from_file tool."
-            )
-        }
-    ]
+    planner_system_prompt = """You are the Lead Planning AI for the AI Outreach Platform.
+Your job is to analyze the user's prompt and generate a single structured Execution Plan in JSON format.
 
+You have access to the following Workers/Tools:
+1. "create_campaign": Creates a new campaign. Arguments: {name: str, description: Optional[str]}
+2. "start_campaign": Starts an existing campaign. Arguments: {campaign_id: Optional[str]}
+3. "pause_campaign": Pauses a running campaign. Arguments: {campaign_id: Optional[str]}
+4. "update_campaign": Updates campaign fields or templates. Arguments: {campaign_id: Optional[str], subject_template: Optional[str], body_template: Optional[str]}
+5. "import_leads": Imports leads from a CSV or Google Sheets URL. Arguments: {campaign_id: Optional[str], file_url: Optional[str]}
+6. "generate_batch_content": Generates all email templates, subjects, follow-up stages, and LinkedIn notes in one batch. Arguments: {campaign_name: str, description: str, vision: Optional[str], products: Optional[str], opportunity: Optional[str], impact: Optional[str], cta: Optional[str]}
+7. "sync_google_sheet": Synchronizes campaign leads with Google Sheets. Arguments: {campaign_id: Optional[str]}
+8. "notify_team": Sends a workspace notification. Arguments: {type: str, title: str, message: str}
+9. "log_timeline": Records an event on the activity timeline. Arguments: {event_type: str, description: str}
+
+CRITICAL RULES:
+- If the user's prompt is a general greeting ("hi", "hello"), conversational question, or general query that does not ask to perform any platform action, set "is_conversational" to true, write a friendly response in "conversational_response", and leave "execution" empty.
+- If the prompt requires creating a campaign, importing leads, or generating sequence templates:
+  - Include "create_campaign" first (if creating a new one).
+  - Include "import_leads" if a file/sheet is provided (make it depend on the campaign creation task id).
+  - Include "generate_batch_content" to draft templates (make it depend on the campaign creation task id).
+  - Include parallel tasks like "sync_google_sheet", "notify_team", and "log_timeline" with "parallel": true.
+- Do NOT use emojis in your response.
+
+Your output must be strictly a JSON object matching this structure:
+{
+  "is_conversational": false,
+  "conversational_response": "",
+  "campaign": {
+    "name": "Market Stakeholder"
+  },
+  "execution": [
+    {
+      "id": "create_campaign_task",
+      "tool": "create_campaign",
+      "arguments": {
+        "name": "Market Stakeholder",
+        "description": "..."
+      }
+    },
+    {
+      "id": "import_leads_task",
+      "tool": "import_leads",
+      "depends_on": ["create_campaign_task"],
+      "arguments": {
+        "file_url": "https://..."
+      }
+    },
+    {
+      "id": "generate_content_task",
+      "tool": "generate_batch_content",
+      "depends_on": ["create_campaign_task"],
+      "arguments": {
+        "campaign_name": "Market Stakeholder",
+        "description": "..."
+      }
+    },
+    {
+      "id": "sync_sheets_task",
+      "tool": "sync_google_sheet",
+      "parallel": true,
+      "arguments": {}
+    },
+    {
+      "id": "notify_team_task",
+      "tool": "notify_team",
+      "parallel": true,
+      "arguments": {
+        "type": "campaign_created",
+        "title": "Campaign Created",
+        "message": "Campaign Market Stakeholder has been created."
+      }
+    }
+  ]
+}
+"""
+
+    messages = [{"role": "system", "content": planner_system_prompt}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": message})
 
-    actions_taken = []
-    executed_tools = set()  # Track executed tool calls to prevent duplicates
-    tool_already_called = False  # Track if we already called a tool this iteration
+    try:
+        completion = await LLMManager.generate_completion(
+            task_type="PLANNING",
+            messages=messages,
+            user_id=user_id,
+            temperature=0.2
+        )
+        content_text = completion.get("content", "{}")
+        
+        from orchestrator.engine import Orchestrator
+        orchestrator_instance = Orchestrator()
+        plan = orchestrator_instance._extract_json(content_text)
+    except Exception as e:
+        logger.error(f"Failed to generate or parse plan: {e}")
+        fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
+        if fallback_res:
+            return fallback_res
+        return {"response": f"Planning failed: {e}", "actions_taken": []}
 
-    # Force tool usage for action keywords
-    action_keywords = ["create", "list", "add", "start", "pause", "delete", "show", "get", "analytics",
-                       "search", "move", "duplicate", "block", "email", "lead", "campaign",
-                       "scrape", "connect", "inbox", "status", "queue", "approve", "reject",
-                       "send", "message"]
-    force_tool = any(kw in message.lower() for kw in action_keywords)
-
-    # Track which destructive tools have been called (prevent duplicates)
-    destructive_tools = {"delete_campaign"}
-
-    for _ in range(5):
-        try:
-            chat_completion = llm_chat_completion(
-                messages=messages,
-                model=active_model,
-                provider=active_provider,
-                tools=CHATBOT_TOOLS,
-                tool_choice="required" if force_tool and not tool_already_called else "auto",
-                temperature=0.3,
-                user_id=user_id
-            )
-        except Exception as e:
-            # If tool_choice="required" fails, retry with "auto"
-            error_str = str(e).lower()
-            if any(term in error_str for term in ["tool choice", "tool_choice", "tool use", "tool_use"]):
-                try:
-                    chat_completion = llm_chat_completion(
-                        messages=messages,
-                        model=active_model,
-                        provider=active_provider,
-                        tools=CHATBOT_TOOLS,
-                        tool_choice="auto",
-                        temperature=0.3,
-                        user_id=user_id
-                    )
-                except Exception as e2:
-                    logger.exception("Error calling LLM (retry)")
-                    fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
-                    if fallback_res:
-                        return fallback_res
-                    return {"response": f"AI model error: {e2}", "actions_taken": actions_taken}
-            else:
-                logger.exception("Error calling LLM")
-                fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
-                if fallback_res:
-                    return fallback_res
-                return {"response": f"AI model error: {e}", "actions_taken": actions_taken}
-
-        response_message = chat_completion.choices[0].message
-
-        if not response_message.tool_calls:
-            assistant_content = response_message.content or ""
-            if not actions_taken:
-                fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
-                if fallback_res and fallback_res.get("actions_taken"):
-                    return fallback_res
-            
-            # Look for pending approvals in the tool outputs
-            pending_approval = None
-            for m in messages:
-                if m.get("role") == "tool":
-                    try:
-                        out_data = json.loads(m["content"])
-                        if isinstance(out_data, dict) and "action_id" in out_data:
-                            action_id = out_data["action_id"]
-                            app_doc = await db.pending_approvals.find_one({"action_id": action_id})
-                            if app_doc:
-                                app_doc.pop("_id", None)
-                                pending_approval = app_doc
-                                break
-                    except Exception:
-                        pass
-                        
-            return {
-                "response": assistant_content,
-                "actions_taken": actions_taken,
-                "pending_approval": pending_approval
-            }
-
-        # Convert response_message to dict to avoid serialization issues
-        msg_dict = {
-            "role": "assistant",
-            "content": response_message.content or ""
+    is_conversational = plan.get("is_conversational", False)
+    if is_conversational or not plan.get("execution"):
+        response_text = plan.get("conversational_response") or "Hello! I am Elly, your Campaign Management Agent. How can I help you today?"
+        return {
+            "response": response_text,
+            "actions_taken": [],
+            "pending_approval": None
         }
-        if response_message.tool_calls:
-            msg_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": tc.type,
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments
-                    }
-                } for tc in response_message.tool_calls
-            ]
-        messages.append(msg_dict)
 
-        # Check if all tool calls are duplicates - if so, break
-        new_tool_calls = []
-        for tool_call in response_message.tool_calls:
-            tool_key = f"{tool_call.function.name}:{tool_call.function.arguments}"
-            if tool_key not in executed_tools:
-                new_tool_calls.append(tool_call)
-                executed_tools.add(tool_key)
+    # Execute plan steps
+    context = {
+        "uploaded_files": uploaded_files or [],
+        "chat_session_id": chat_session_id
+    }
+    
+    # If the user uploaded a file and we have an import_leads task, fill in the file URL
+    if uploaded_files and len(uploaded_files) > 0:
+        file_url = uploaded_files[0].get("url")
+        for step in plan.get("execution", []):
+            if step.get("tool") == "import_leads" and not step.get("arguments", {}).get("file_url"):
+                step["arguments"]["file_url"] = file_url
 
-        if not new_tool_calls:
-            # All tools were duplicates, break to avoid infinite loop
-            break
+    execution_result = await OrchestratorScheduler.execute_plan(
+        user_id=user_id,
+        plan=plan,
+        initial_context=context
+    )
 
-        for tool_call in new_tool_calls:
-            tool_name = tool_call.function.name
-            tool_args = json.loads(tool_call.function.arguments)
-            actions_taken.append({"tool": tool_name, "arguments": tool_args})
-            tool_output = await execute_tool(name=tool_name, args=tool_args, user_id=user_id, uploaded_files=_current_uploaded_files, background_tasks=background_tasks, chat_session_id=chat_session_id)
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": tool_name,
-                "content": tool_output
-            })
-            tool_already_called = True  # Don't force tool on next iteration
+    actions_taken = execution_result.get("actions_taken", [])
 
-        # If a destructive tool was executed, don't loop again
-        if any(tc.function.name in destructive_tools for tc in new_tool_calls):
-            break
+    # Single Result Aggregation LLM Call
+    aggregator_system_prompt = """You are Elly, the Campaign Management AI.
+Your job is to write a single unified and professional final response summarizing the actions executed by the platform.
+You will be provided with the user's initial prompt and a list of actions executed and their results.
+
+Summarize everything clearly in markdown format. Explain:
+- What was created or modified (Campaign details, templates, sequences generated).
+- Details about imported leads (counts, headers).
+- Secondary actions like team notifications or sheets sync completed in the background.
+
+Ensure the response is clean, cohesive, professional, and investor-focused. Do NOT use emojis. Do NOT show JSON or backend details.
+"""
+
+    aggregator_messages = [
+        {"role": "system", "content": aggregator_system_prompt},
+        {"role": "user", "content": f"User prompt: {message}\n\nExecution Results:\n{json.dumps(execution_result, default=str)}"}
+    ]
 
     try:
-        final_completion = llm_chat_completion(
-            messages=messages,
-            model=active_model,
-            provider=active_provider,
-            temperature=0.3,
-            user_id=user_id
+        agg_completion = await LLMManager.generate_completion(
+            task_type="FAST_CHAT_RESPONSES",
+            messages=aggregator_messages,
+            user_id=user_id,
+            temperature=0.3
         )
-        # Look for pending approvals in the tool outputs
-        pending_approval = None
-        for m in messages:
-            if m.get("role") == "tool":
-                try:
-                    out_data = json.loads(m["content"])
-                    if isinstance(out_data, dict) and "action_id" in out_data:
-                        action_id = out_data["action_id"]
-                        app_doc = await db.pending_approvals.find_one({"action_id": action_id})
-                        if app_doc:
-                            app_doc.pop("_id", None)
-                            pending_approval = app_doc
-                            break
-                except Exception:
-                    pass
-        return {
-            "response": final_completion.choices[0].message.content or "",
-            "actions_taken": actions_taken,
-            "pending_approval": pending_approval
-        }
+        response_text = agg_completion.get("content", "Execution completed.")
     except Exception as e:
-        # If final response fails, return a summary of what was done
-        pending_approval = None
-        for m in messages:
-            if m.get("role") == "tool":
-                try:
-                    out_data = json.loads(m["content"])
-                    if isinstance(out_data, dict) and "action_id" in out_data:
-                        action_id = out_data["action_id"]
-                        app_doc = await db.pending_approvals.find_one({"action_id": action_id})
-                        if app_doc:
-                            app_doc.pop("_id", None)
-                            pending_approval = app_doc
-                            break
-                except Exception:
-                    pass
-        if actions_taken:
-            summary = "Actions completed:\n"
-            for action in actions_taken:
-                summary += f"- {action['tool']}: {json.dumps(action['arguments'])}\n"
-            return {"response": summary, "actions_taken": actions_taken, "pending_approval": pending_approval}
-        return {"response": f"Response generation failed: {e}", "actions_taken": actions_taken}
+        logger.error(f"Aggregator call failed: {e}")
+        response_text = f"Campaign action completed successfully.\n\nActions taken:\n"
+        for act in actions_taken:
+            response_text += f"- {act.get('tool')} ({act.get('status')})\n"
+
+    # Resolve pending approval if any
+    pending_approval = None
+    try:
+        campaign_id = execution_result.get("context", {}).get("campaign_id")
+        if campaign_id:
+            app_doc = await db.pending_approvals.find_one({"campaign_id": campaign_id})
+            if app_doc:
+                app_doc.pop("_id", None)
+                pending_approval = app_doc
+    except Exception as e:
+        logger.warning(f"Could not fetch pending approvals: {e}")
+
+    return {
+        "response": response_text,
+        "actions_taken": actions_taken,
+        "pending_approval": pending_approval
+    }

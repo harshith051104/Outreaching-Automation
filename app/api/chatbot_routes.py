@@ -5,6 +5,7 @@ Handles natural language prompt queries from the frontend client.
 """
 
 from typing import List, Dict, Optional
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel
 
@@ -51,6 +52,13 @@ async def chat_with_elly(
         )
         return result
     except Exception as exc:
+        import traceback
+        try:
+            with open("c:/Users/sriha/My work/Outreach/error_traceback.txt", "a", encoding="utf-8") as f:
+                f.write(f"\n--- CHATBOT ERROR AT {datetime.now(timezone.utc).isoformat()} ---\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Chatbot failed to process message: {exc}"

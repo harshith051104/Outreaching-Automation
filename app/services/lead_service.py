@@ -75,6 +75,30 @@ async def get_leads(
 ) -> list:
     """List leads for a campaign with pagination."""
     db = await get_database()
+    
+    # Self-healing: if campaign_id is a UUID, check if we need to migrate leads matching campaign name
+    if campaign_id and len(campaign_id) == 36:
+        campaign = await db.campaigns.find_one({"id": campaign_id, "user_id": user_id})
+        if campaign:
+            camp_name = campaign.get("name")
+            if camp_name:
+                import re
+                name_query = {
+                    "user_id": user_id,
+                    "campaign_id": {"$regex": f"^{re.escape(camp_name)}$", "$options": "i"}
+                }
+                matching_count = await db.leads.count_documents(name_query)
+                if matching_count > 0:
+                    await db.leads.update_many(
+                        name_query,
+                        {"$set": {"campaign_id": campaign_id, "updated_at": datetime.now(timezone.utc)}}
+                    )
+                    total_leads = await db.leads.count_documents({"campaign_id": campaign_id})
+                    await db.campaigns.update_one(
+                        {"id": campaign_id},
+                        {"$set": {"total_leads": total_leads}}
+                    )
+
     query: dict = {"user_id": user_id}
     if campaign_id:
         query["campaign_id"] = campaign_id

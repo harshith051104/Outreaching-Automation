@@ -53,12 +53,29 @@ async def list_notifications(
 
     res_list = []
     for n in notifs_list:
-        notif_model = Notification.from_dict(n)
-        sender_info = await _populate_user_info(notif_model.sender_id)
+        try:
+            # Coerce fields to prevent Pydantic validation failures on old documents
+            if "_id" in n:
+                n["id"] = str(n.pop("_id"))
+            elif "id" in n:
+                n["id"] = str(n["id"])
+                
+            if "reference_id" not in n:
+                n["reference_id"] = ""
+            if "reference_type" not in n:
+                n["reference_type"] = ""
+            if "is_read" not in n:
+                n["is_read"] = False
 
-        notif_data = notif_model.model_dump()
-        notif_data["sender_info"] = sender_info
-        res_list.append(notif_data)
+            notif_model = Notification.from_dict(n)
+            sender_info = await _populate_user_info(notif_model.sender_id)
+
+            notif_data = notif_model.model_dump()
+            notif_data["sender_info"] = sender_info
+            res_list.append(notif_data)
+        except Exception as e:
+            logger.warning("Failed to parse notification document %s: %s", n, e)
+            continue
 
     return res_list
 

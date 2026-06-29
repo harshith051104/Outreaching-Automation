@@ -1205,10 +1205,18 @@ async def _find_and_click_connect_button(page) -> tuple[bool, int | None, str | 
         except Exception:
             pass
 
-    # If no action area is found, fall back to page
+    # If no action area is found, fall back to main container, or page if all else fails
     if not active_area:
-        logger.warning("No profile action area found! Falling back to page-wide search.")
-        active_area = page
+        try:
+            main_area = page.locator("main.scaffold-layout__main").first
+            if await main_area.is_visible(timeout=1000):
+                active_area = main_area
+                logger.info("Falling back to main layout area search.")
+        except Exception:
+            pass
+        if not active_area:
+            logger.warning("No profile action area found! Falling back to page-wide search.")
+            active_area = page
 
     # Let's check for a direct 'Connect' button (Scenario 1)
     connect_btn = None
@@ -1264,25 +1272,20 @@ async def _find_and_click_connect_button(page) -> tuple[bool, int | None, str | 
             error_reason = f"Scenario 1 click failed: {str(e)}"
     
     elif follow_btn:
-        # Scenario 2: Follow Button Visible
+        # Scenario 2: Follow Button Visible. Skip Follow click to avoid ad redirects, go straight to More -> Connect
         scenario = 2
-        logger.info("Scenario 2: Follow button visible. Clicking Follow first...")
+        logger.info("Scenario 2: Follow button visible. Skipping Follow click, going straight to More dropdown...")
         try:
-            await _take_playwright_screenshot(page, "before_click_follow")
-            await follow_btn.scroll_into_view_if_needed()
-            await follow_btn.click(force=True, timeout=3000)
-            await _random_delay(2.0, 3.0)
-            await _take_playwright_screenshot(page, "after_click_follow")
-
             # Click More menu
             more_btn = None
             more_selectors = [
+                "main button[aria-label='More actions']",
+                "main button:has-text('More')",
+                "main button[aria-label='More']",
                 "button[aria-label='More actions']",
-                "button:has-text('More')",
-                "button[aria-label='More']",
             ]
             for more_sel in more_selectors:
-                loc = active_area.locator(more_sel).first
+                loc = page.locator(more_sel).first
                 if await loc.is_visible(timeout=1000):
                     more_btn = loc
                     break
@@ -1293,27 +1296,44 @@ async def _find_and_click_connect_button(page) -> tuple[bool, int | None, str | 
                 await _random_delay(1.5, 2.5)
                 await _take_playwright_screenshot(page, "after_more_click_scenario_2")
 
-                # Find Connect option in the dropdown list
-                dropdown_connect_selectors = [
-                    "div[role='menu'] *:has-text('Connect')",
-                    "div.artdeco-dropdown__content *:has-text('Connect')",
-                    "ul.artdeco-dropdown__content-inner li:has-text('Connect')",
-                    "*[role='menuitem']:has-text('Connect')",
-                    "li:has-text('Connect')",
-                    "span:has-text('Connect')",
+                # Find the visible dropdown container
+                dropdown_container = None
+                dropdown_selectors = [
+                    "div[role='menu']",
+                    "div.artdeco-dropdown__content",
+                    "ul.artdeco-dropdown__content-inner",
                 ]
-                for conn_sel in dropdown_connect_selectors:
+                for dd_sel in dropdown_selectors:
                     try:
-                        conn_loc = page.locator(conn_sel).first
-                        if await conn_loc.is_visible(timeout=1000):
-                            await conn_loc.click(force=True, timeout=3000)
-                            connect_clicked = True
-                            logger.info("Scenario 2: Clicked Connect inside More dropdown (%s)", conn_sel)
-                            await _random_delay(1.5, 2.5)
-                            await _take_playwright_screenshot(page, "after_connect_click_scenario_2")
+                        loc = page.locator(dd_sel).first
+                        if await loc.is_visible(timeout=1000):
+                            dropdown_container = loc
                             break
                     except Exception:
                         pass
+
+                if dropdown_container:
+                    # Find Connect option in the dropdown list
+                    dropdown_connect_selectors = [
+                        "*:has-text('Connect')",
+                        "*[role='menuitem']:has-text('Connect')",
+                        "li:has-text('Connect')",
+                        "span:has-text('Connect')",
+                    ]
+                    for conn_sel in dropdown_connect_selectors:
+                        try:
+                            conn_loc = dropdown_container.locator(conn_sel).first
+                            if await conn_loc.is_visible(timeout=1000):
+                                await conn_loc.click(force=True, timeout=3000)
+                                connect_clicked = True
+                                logger.info("Scenario 2: Clicked Connect inside More dropdown (%s)", conn_sel)
+                                await _random_delay(1.5, 2.5)
+                                await _take_playwright_screenshot(page, "after_connect_click_scenario_2")
+                                break
+                        except Exception:
+                            pass
+                else:
+                    logger.warning("Scenario 2: Dropdown container not found after clicking More button.")
                 
                 if not connect_clicked:
                     error_reason = "Connect option not found in More dropdown (Scenario 2)"
@@ -1337,12 +1357,13 @@ async def _find_and_click_connect_button(page) -> tuple[bool, int | None, str | 
             # Click More menu
             more_btn = None
             more_selectors = [
+                "main button[aria-label='More actions']",
+                "main button:has-text('More')",
+                "main button[aria-label='More']",
                 "button[aria-label='More actions']",
-                "button:has-text('More')",
-                "button[aria-label='More']",
             ]
             for more_sel in more_selectors:
-                loc = active_area.locator(more_sel).first
+                loc = page.locator(more_sel).first
                 if await loc.is_visible(timeout=1000):
                     more_btn = loc
                     break
@@ -1353,27 +1374,44 @@ async def _find_and_click_connect_button(page) -> tuple[bool, int | None, str | 
                 await _random_delay(1.5, 2.5)
                 await _take_playwright_screenshot(page, "after_more_click_scenario_3")
 
-                # Find Connect option in the dropdown list
-                dropdown_connect_selectors = [
-                    "div[role='menu'] *:has-text('Connect')",
-                    "div.artdeco-dropdown__content *:has-text('Connect')",
-                    "ul.artdeco-dropdown__content-inner li:has-text('Connect')",
-                    "*[role='menuitem']:has-text('Connect')",
-                    "li:has-text('Connect')",
-                    "span:has-text('Connect')",
+                # Find the visible dropdown container
+                dropdown_container = None
+                dropdown_selectors = [
+                    "div[role='menu']",
+                    "div.artdeco-dropdown__content",
+                    "ul.artdeco-dropdown__content-inner",
                 ]
-                for conn_sel in dropdown_connect_selectors:
+                for dd_sel in dropdown_selectors:
                     try:
-                        conn_loc = page.locator(conn_sel).first
-                        if await conn_loc.is_visible(timeout=1000):
-                            await conn_loc.click(force=True, timeout=3000)
-                            connect_clicked = True
-                            logger.info("Scenario 3: Clicked Connect inside More dropdown (%s)", conn_sel)
-                            await _random_delay(1.5, 2.5)
-                            await _take_playwright_screenshot(page, "after_connect_click_scenario_3")
+                        loc = page.locator(dd_sel).first
+                        if await loc.is_visible(timeout=1000):
+                            dropdown_container = loc
                             break
                     except Exception:
                         pass
+
+                if dropdown_container:
+                    # Find Connect option in the dropdown list
+                    dropdown_connect_selectors = [
+                        "*:has-text('Connect')",
+                        "*[role='menuitem']:has-text('Connect')",
+                        "li:has-text('Connect')",
+                        "span:has-text('Connect')",
+                    ]
+                    for conn_sel in dropdown_connect_selectors:
+                        try:
+                            conn_loc = dropdown_container.locator(conn_sel).first
+                            if await conn_loc.is_visible(timeout=1000):
+                                await conn_loc.click(force=True, timeout=3000)
+                                connect_clicked = True
+                                logger.info("Scenario 3: Clicked Connect inside More dropdown (%s)", conn_sel)
+                                await _random_delay(1.5, 2.5)
+                                await _take_playwright_screenshot(page, "after_connect_click_scenario_3")
+                                break
+                        except Exception:
+                            pass
+                else:
+                    logger.warning("Scenario 3: Dropdown container not found after clicking More button.")
                 
                 if not connect_clicked:
                     error_reason = "Connect option not found in More dropdown"
