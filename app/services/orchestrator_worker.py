@@ -38,6 +38,17 @@ class CampaignWorker:
             except:
                 raw_steps = None
 
+        # LINKEDIN DISABLED: strip any linkedin steps from the LLM-provided sequence
+        if raw_steps and isinstance(raw_steps, list):
+            email_only_steps = [
+                {**s, "channel": "email"}
+                for s in raw_steps
+                if s.get("channel", "email").lower() != "linkedin"
+            ]
+            for idx, s in enumerate(email_only_steps):
+                s["step_number"] = idx + 1
+            raw_steps = email_only_steps or None
+
         campaign_data = CampaignCreate(
             name=args["name"],
             description=args.get("description", ""),
@@ -285,17 +296,17 @@ class BatchContentWorker:
         logger.info(f"BatchContentWorker: Generating batch templates for campaign '{campaign_name}'")
         
         system_prompt = """You are an expert copywriter and sales assistant.
-Your task is to generate a comprehensive sales outreach campaign in a single response.
+Your task is to generate a comprehensive email outreach campaign in a single response.
 
 You MUST generate:
 1. An initial outreach email subject line.
 2. An initial outreach email body template (using {{first_name}}, {{company}}, etc. for personalization).
-3. A multi-step sequence containing follow-up steps (both email and LinkedIn connection request notes/DMs).
+3. A multi-step sequence containing follow-up EMAIL steps only (no LinkedIn).
 
 Ensure that:
-- LinkedIn connection notes are concise and under 300 characters.
 - Tone is professional, persuasive, and customized to the provided business details.
-- Templates use double braces like {{first_name}}, {{company}}, {{sender_name}}, etc.
+- Templates use double braces like {{first_name}}, {{company}}, {{sender_name}}, {{sender_title}}, {{sender_email}}.
+- Each follow-up email builds on the previous one with a different angle.
 
 Return your response strictly as a JSON object matching this structure:
 {
@@ -304,27 +315,22 @@ Return your response strictly as a JSON object matching this structure:
   "sequence_steps": [
     {
       "step_number": 1,
-      "channel": "linkedin",
-      "delay_days": 0,
-      "body_template": "LinkedIn Connection Request Note (under 300 chars, e.g. Best,\\n{{sender_name}})"
-    },
-    {
-      "step_number": 2,
       "channel": "email",
       "delay_days": 3,
       "subject_template": "Follow-up Email Subject Line",
       "body_template": "Follow-up Email Body Text..."
     },
     {
-      "step_number": 3,
-      "channel": "linkedin",
-      "delay_days": 5,
-      "body_template": "LinkedIn Follow-up message DM..."
-    },
-    {
-      "step_number": 4,
+      "step_number": 2,
       "channel": "email",
       "delay_days": 10,
+      "subject_template": "Second Follow-up Subject",
+      "body_template": "Second follow-up body text..."
+    },
+    {
+      "step_number": 3,
+      "channel": "email",
+      "delay_days": 20,
       "subject_template": "Final Follow-up Subject",
       "body_template": "Final break-up Email body text..."
     }
@@ -369,6 +375,17 @@ Call To Action: {args.get("cta", "a quick call")}
                 "sequence_steps": []
             }
 
+        # LINKEDIN DISABLED: filter out any linkedin steps the LLM may have hallucinated
+        raw_sequence = parsed_content.get("sequence_steps") or []
+        email_only_sequence = [
+            {**s, "channel": "email"}
+            for s in raw_sequence
+            if s.get("channel", "email").lower() != "linkedin"
+        ]
+        # Re-index step numbers to be contiguous
+        for idx, s in enumerate(email_only_sequence):
+            s["step_number"] = idx + 1
+
         # Update campaign in MongoDB if ID exists
         if campaign_id:
             db = await get_database()
@@ -378,16 +395,16 @@ Call To Action: {args.get("cta", "a quick call")}
                     "$set": {
                         "subject_template": parsed_content.get("subject_template"),
                         "body_template": parsed_content.get("body_template"),
-                        "sequence_steps": parsed_content.get("sequence_steps"),
+                        "sequence_steps": email_only_sequence,
                         "updated_at": datetime.now(timezone.utc)
                     }
                 }
             )
-            logger.info(f"BatchContentWorker: Campaign templates and sequence updated for ID {campaign_id}")
+            logger.info(f"BatchContentWorker: Campaign templates and sequence (email-only) updated for ID {campaign_id}")
 
         return {
             "status": "success",
             "subject_template": parsed_content.get("subject_template"),
             "body_template": parsed_content.get("body_template"),
-            "sequence_steps": parsed_content.get("sequence_steps")
+            "sequence_steps": email_only_sequence
         }
