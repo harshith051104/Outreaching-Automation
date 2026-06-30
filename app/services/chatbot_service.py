@@ -1954,11 +1954,11 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
     # 1. Create Campaign (multi-step: create → import leads → start if requested in same message)
     create_match = re.search(
-        r"create\s+(?:a\s+)?(?:new\s+)?campaign\s+(?:named|called)?\s*['\"]?([\w\s\-\.]+?)['\"]?(?:\s+with|\s+subject|\.|\s*$)",
+        r"create\s+(?:a\s+)?(?:new\s+)?campaign\s+(?:named|called)?\s*(?:['\"]([^'\"]+)['\"]|([\w\s\-\.]+?))(?:\s+and|\s+with|\s+subject|\.|\s*$)",
         message, re.IGNORECASE
     )
     if create_match:
-        name = create_match.group(1).strip()
+        name = (create_match.group(1) or create_match.group(2) or "").strip()
         subject_match = re.search(r"subject\s+(?:line\s+)?(?:of\s+)?['\"]?([^'\"]+?)['\"]?(?:\s+body|\.|\s*$)", message, re.IGNORECASE)
         body_match = re.search(r"body\s+(?:of\s+)?['\"]?([^'\"]+?)['\"]?(?:\.|\s*$)", message, re.IGNORECASE)
         args = {
@@ -2596,6 +2596,7 @@ CRITICAL RULES:
   - Include "import_leads" if a file/sheet is provided (make it depend on the campaign creation task id).
   - Include "generate_batch_content" to draft templates (make it depend on the campaign creation task id).
   - Include parallel tasks like "sync_google_sheet", "notify_team", and "log_timeline" with "parallel": true.
+- CRITICAL JSON COMPLIANCE: If you output any email templates, subject lines, or body text arguments in the JSON execution plan, you MUST escape all double quotes as \\\" and escape all newlines as \\n. The JSON must be strictly valid.
 - Do NOT use emojis in your response.
 
 Your output must be strictly a JSON object matching this structure:

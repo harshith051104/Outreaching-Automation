@@ -578,18 +578,46 @@ Return your output strictly as a JSON object matching this structure:
             return {"raw_output": content}
 
     def _extract_json(self, text: str) -> dict:
-        """Extract and parse the first JSON object found in a text string."""
-        # 1. Try to load the entire text directly
+        """Extract and parse the first JSON object found in a text string, with newline repair."""
+        def repair_json_newlines(raw_text: str) -> str:
+            chars = list(raw_text)
+            in_string = False
+            escape = False
+            for i in range(len(chars)):
+                c = chars[i]
+                if c == '"' and not escape:
+                    in_string = not in_string
+                elif c == '\\' and not escape:
+                    escape = True
+                    continue
+                elif c == '\n' and in_string:
+                    chars[i] = '\\n'
+                elif c == '\r' and in_string:
+                    chars[i] = ''
+                escape = False
+            return "".join(chars)
+
+        # 1. Try to load the entire text directly (both raw and repaired)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
+        try:
+            return json.loads(repair_json_newlines(text))
+        except json.JSONDecodeError:
+            pass
+
         # 2. Try to extract JSON from markdown code blocks
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        json_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
         if json_match:
+            block_content = json_match.group(1).strip()
             try:
-                return json.loads(json_match.group(1))
+                return json.loads(block_content)
+            except json.JSONDecodeError:
+                pass
+            try:
+                return json.loads(repair_json_newlines(block_content))
             except json.JSONDecodeError:
                 pass
 
@@ -603,19 +631,29 @@ Return your output strictly as a JSON object matching this structure:
                 elif text[i] == "}":
                     depth -= 1
                     if depth == 0:
+                        candidate = text[brace_start : i + 1]
                         try:
-                            return json.loads(text[brace_start : i + 1])
+                            return json.loads(candidate)
+                        except json.JSONDecodeError:
+                            pass
+                        try:
+                            return json.loads(repair_json_newlines(candidate))
                         except json.JSONDecodeError:
                             pass
 
         # 4. Fallback: search for a greedy match between first '{' and last '}'
-        try:
-            first_brace = text.find("{")
-            last_brace = text.rfind("}")
-            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-                return json.loads(text[first_brace : last_brace + 1])
-        except json.JSONDecodeError:
-            pass
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            candidate = text[first_brace : last_brace + 1]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+            try:
+                return json.loads(repair_json_newlines(candidate))
+            except json.JSONDecodeError:
+                pass
 
         raise ValueError("No valid JSON found in text.")
 
