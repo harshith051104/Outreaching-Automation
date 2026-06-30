@@ -64,19 +64,66 @@ async def _execute_campaign_async(campaign_id: str) -> dict:
     results = []
     for lead in leads:
         try:
+            # Atomically claim lead to prevent duplicate scheduler runs
+            updated_lead = await db.leads.find_one_and_update(
+                {"_id": lead["_id"], "status": "new"},
+                {"$set": {"status": "contacted", "updated_at": datetime.now(timezone.utc)}}
+            )
+            if not updated_lead:
+                logger.info("Scheduler: Lead %s is already being scheduled by another process. Skipping.", lead.get("id"))
+                continue
+
             if campaign.get("sequence_steps"):
                 from app.services.task_scheduler_service import TaskSchedulerService
-                await TaskSchedulerService.schedule_lead_sequence(
-                    user_id=campaign["user_id"],
-                    campaign_id=campaign["id"],
-                    lead_id=lead["id"],
-                    sequence_steps=campaign["sequence_steps"]
-                )
-                await db.leads.update_one(
-                    {"id": lead["id"]},
-                    {"$set": {"status": "contacted", "updated_at": datetime.now(timezone.utc)}}
-                )
-                results.append({"lead_id": lead["id"], "status": "scheduled_sequence"})
+                
+                # Prepend the main email template (Initial Campaign Email) as Step 1 (delay 0)
+                if campaign.get("subject_template") or campaign.get("body_template"):
+                    main_email = {
+                        "step_number": 1,
+                        "channel": "email",
+                        "delay_days": 0,
+                        "subject_template": campaign.get("subject_template") or "Quick question",
+                        "body_template": campaign.get("body_template") or "Hi {{first_name}},"
+                    }
+                    steps = [main_email]
+                    custom_steps = campaign.get("sequence_steps") or []
+                    email_only_steps = [s for s in custom_steps if s.get("channel", "email").lower() != "linkedin"]
+                    for idx, step in enumerate(email_only_steps):
+                        steps.append({
+                            "step_number": idx + 2,
+                            "channel": "email",
+                            "delay_days": step.get("delay_days") or 0,
+                            "subject_template": step.get("subject_template") or "",
+                            "body_template": step.get("body_template") or ""
+                        })
+                else:
+                    custom_steps = campaign.get("sequence_steps") or []
+                    email_only_steps = [s for s in custom_steps if s.get("channel", "email").lower() != "linkedin"]
+                    steps = []
+                    for idx, step in enumerate(email_only_steps):
+                        steps.append({
+                            "step_number": idx + 1,
+                            "channel": "email",
+                            "delay_days": step.get("delay_days") or 0,
+                            "subject_template": step.get("subject_template") or "",
+                            "body_template": step.get("body_template") or ""
+                        })
+                
+                try:
+                    await TaskSchedulerService.schedule_lead_sequence(
+                        user_id=campaign["user_id"],
+                        campaign_id=campaign["id"],
+                        lead_id=lead["id"],
+                        sequence_steps=steps
+                    )
+                    results.append({"lead_id": lead["id"], "status": "scheduled_sequence"})
+                except Exception as sched_err:
+                    # Rollback status to new
+                    await db.leads.update_one(
+                        {"_id": lead["_id"]},
+                        {"$set": {"status": "new", "updated_at": datetime.now(timezone.utc)}}
+                    )
+                    raise sched_err
             else:
                 result = await _process_lead(campaign, lead)
                 results.append({"lead_id": lead["id"], "status": result})
@@ -198,10 +245,15 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
     subject = ""
     body_html = ""
 
-    lead_name = f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip() or lead.get('name', '') or lead.get('email', '')
+    lead_email = lead.get("email", "").strip()
+    if not lead_email:
+        logger.warning("Email task skipped for lead %s — no email address found.", lead.get("id"))
+        return "skipped"
+
+    lead_name = f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip() or lead.get('name', '') or lead_email
     lead_data_for_ai = {
         "name": lead_name,
-        "email": lead.get("email", ""),
+        "email": lead_email,
         "company": lead.get("company", ""),
         "role": lead.get("title", "") or lead.get("role", ""),
         "website": lead.get("website", ""),
@@ -253,7 +305,7 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
         campaign_id=campaign["id"],
         lead_id=lead["id"],
         gmail_account_id=gmail_account_id,
-        to=lead["email"],
+        to=lead_email,
         subject=subject,
         body_html=body_html,
         sequence_number=1,
@@ -334,7 +386,7 @@ async def _process_active_campaigns_async() -> dict:
                     steps.append({
                         "step_number": idx + 2,
                         "channel": "email",
-                        "delay_days": (step.get("delay_days") or 0) + 3,
+                        "delay_days": step.get("delay_days") or 0,
                         "subject_template": step.get("subject_template") or "",
                         "body_template": step.get("body_template") or ""
                     })
@@ -369,17 +421,31 @@ async def _process_active_campaigns_async() -> dict:
                 
             for lead in pending_leads:
                 lead_id = lead.get("id") or str(lead["_id"])
-                await TaskSchedulerService.schedule_lead_sequence(
-                    user_id=campaign["user_id"],
-                    campaign_id=campaign["id"],
-                    lead_id=lead_id,
-                    sequence_steps=steps
-                )
-                await db.leads.update_one(
-                    {"_id": lead["_id"]},
+                
+                # Atomically claim lead to prevent duplicate scheduler runs
+                updated_lead = await db.leads.find_one_and_update(
+                    {"_id": lead["_id"], "status": "new"},
                     {"$set": {"status": "contacted", "updated_at": now}}
                 )
-                scheduled_count += 1
+                if not updated_lead:
+                    logger.info("Celery Scheduler: Lead %s is already being scheduled by another process. Skipping.", lead_id)
+                    continue
+
+                try:
+                    await TaskSchedulerService.schedule_lead_sequence(
+                        user_id=campaign["user_id"],
+                        campaign_id=campaign["id"],
+                        lead_id=lead_id,
+                        sequence_steps=steps
+                    )
+                    scheduled_count += 1
+                except Exception as lead_exc:
+                    logger.error("Celery Scheduler: FAILED to schedule lead %s (%s): %s", lead_id, lead.get("email"), lead_exc)
+                    # Rollback status to new
+                    await db.leads.update_one(
+                        {"_id": lead["_id"]},
+                        {"$set": {"status": "new", "updated_at": datetime.now(timezone.utc)}}
+                    )
                 
     return {"status": "ok", "scheduled_leads": scheduled_count}
 

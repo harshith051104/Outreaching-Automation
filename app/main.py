@@ -313,7 +313,7 @@ async def _campaign_processor_loop():
                             steps.append({
                                 "step_number": idx + 2,
                                 "channel": "email",
-                                "delay_days": (step.get("delay_days") or 0) + 3,
+                                "delay_days": step.get("delay_days") or 0,
                                 "subject_template": step.get("subject_template") or "",
                                 "body_template": step.get("body_template") or ""
                             })
@@ -348,6 +348,16 @@ async def _campaign_processor_loop():
 
                     for lead in pending_leads:
                         lead_id = lead.get("id") or str(lead["_id"])
+                        
+                        # Atomically claim lead to prevent duplicate scheduler runs
+                        updated_lead = await db.leads.find_one_and_update(
+                            {"_id": lead["_id"], "status": "new"},
+                            {"$set": {"status": "contacted", "updated_at": now}}
+                        )
+                        if not updated_lead:
+                            logger.info("Scheduler: Lead %s is already being scheduled by another process. Skipping.", lead_id)
+                            continue
+
                         try:
                             await TaskSchedulerService.schedule_lead_sequence(
                                 user_id=campaign["user_id"],
@@ -355,13 +365,14 @@ async def _campaign_processor_loop():
                                 lead_id=lead_id,
                                 sequence_steps=steps
                             )
-                            await db.leads.update_one(
-                                {"_id": lead["_id"]},
-                                {"$set": {"status": "contacted", "updated_at": now}}
-                            )
                             logger.info("Scheduler: Lead %s (%s) sequence scheduled ✓", lead_id, lead.get("email"))
                         except Exception as lead_exc:
                             logger.error("Scheduler: FAILED to schedule lead %s (%s): %s", lead_id, lead.get("email"), lead_exc)
+                            # Rollback status to new so it gets retried
+                            await db.leads.update_one(
+                                {"_id": lead["_id"]},
+                                {"$set": {"status": "new", "updated_at": datetime.now(timezone.utc)}}
+                            )
 
             # Process scheduled campaign tasks
             await TaskSchedulerService.process_pending_tasks()
