@@ -1973,7 +1973,7 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
         campaign_id = res_dict["campaign"]["id"]
         actions_taken = [{"tool": "create_campaign", "arguments": args}]
-        steps_done = [f"✅ Created campaign **{name}** (ID: `{campaign_id}`)"]
+        steps_done = [f"- Created campaign **{name}** (ID: `{campaign_id}`)"]
 
         # Import leads from Google Sheet / CSV URL if present in same message
         sheet_url_match = re.search(
@@ -1986,17 +1986,17 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
             import_res = await execute_tool("import_leads", import_args, user_id)
             try:
                 import_dict = json.loads(import_res)
-                imported = import_dict.get("imported_count") or import_dict.get("count") or import_dict.get("total") or 0
-                steps_done.append(f"✅ Imported **{imported} leads** from the provided sheet")
+                imported = import_dict.get("leads_created") or import_dict.get("valid_leads") or import_dict.get("imported_count") or 0
+                steps_done.append(f"- Imported **{imported} leads** from the provided sheet")
                 actions_taken.append({"tool": "import_leads", "arguments": import_args})
             except Exception:
-                steps_done.append("⚠️ Lead import attempted — check campaign leads page to confirm")
+                steps_done.append("- [Warning] Lead import attempted — check campaign leads page to confirm")
 
         # Start the campaign if the message also requests it
         wants_start = re.search(r"\b(start|launch|activate|begin)\b", message, re.IGNORECASE)
         if wants_start:
             await execute_tool("start_campaign", {"campaign_id": campaign_id}, user_id)
-            steps_done.append(f"✅ Campaign **{name}** started — emails are being scheduled")
+            steps_done.append(f"- Campaign **{name}** started — emails are being scheduled")
             actions_taken.append({"tool": "start_campaign", "arguments": {"campaign_id": campaign_id}})
 
         return {
