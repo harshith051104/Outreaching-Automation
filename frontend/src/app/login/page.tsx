@@ -160,6 +160,7 @@ export default function LoginPage() {
                 />
                 <button
                   type="button"
+                  suppressHydrationWarning
                   onClick={() => setShowPassword(!showPassword)}
                   style={{
                     position: 'absolute',

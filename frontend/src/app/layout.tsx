@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "AI Outreach Platform",
-  description: "AI-powered outreach automation with CrewAI",
+  description: "Metadata-driven autonomous AI outreach platform",
 };
 
 export default function RootLayout({

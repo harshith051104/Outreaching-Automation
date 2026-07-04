@@ -263,7 +263,7 @@ async def generate_campaign_insights(campaign_id: str) -> dict:
         "top_leads": [
             {
                 "lead_id": l["id"],
-                "email": l["email"],
+                "email": l.get("email", ""),
                 "name": f'{l.get("first_name", "")} {l.get("last_name", "")}'.strip(),
                 "engagement_score": l.get("engagement_score", 0),
             }

@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { getDashboardStats } from "@/services/analytics-api";
 import { getDashboardStats as getTaskDashboardStats, DashboardStats } from "@/services/task-api";
 import { getLeads } from "@/services/lead-api";
-import { getSignals, getAllOpportunities } from "@/services/signals-api";
 import Link from "next/link";
 import TeamOverviewWidget from "@/components/dashboard/TeamOverviewWidget";
 import { 
@@ -15,11 +14,10 @@ import {
   MessageSquare, 
   Calendar,
   Sparkles,
-  TrendingUp,
   Brain,
   ArrowRight,
   PlusCircle,
-  Linkedin,
+  Settings,
   Bot,
   Lightbulb,
   ClipboardList,
@@ -52,8 +50,6 @@ const METRIC_CONFIGS: Record<string, { gradient: string; glow: string; icon: str
 export default function DashboardPage() {
   const [stats, setStats] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
-  const [signals, setSignals] = useState<any[]>([]);
-  const [opportunities, setOpportunities] = useState<any[]>([]);
   const [taskStats, setTaskStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -64,18 +60,14 @@ export default function DashboardPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [statsData, leadsData, signalsData, oppsData, taskStatsData] = await Promise.all([
+      const [statsData, leadsData, taskStatsData] = await Promise.all([
         getDashboardStats().catch(() => null),
         getLeads().catch(() => []),
-        getSignals().catch(() => []),
-        getAllOpportunities().catch(() => []),
         getTaskDashboardStats().catch(() => null)
       ]);
 
       setStats(statsData);
       setLeads(leadsData);
-      setSignals(signalsData);
-      setOpportunities(oppsData);
       setTaskStats(taskStatsData);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
@@ -111,30 +103,6 @@ export default function DashboardPage() {
   const highIntentLeads = leads.filter(l => l.score >= 80).length;
   const meetingsBooked = leads.filter(l => l.status === "meeting" || l.status === "replied").length;
 
-  const signalTypes = {
-    funding: signals.filter(s => s.category?.toLowerCase().includes("funding") || s.signal_type?.includes("funding")).length,
-    hiring: signals.filter(s => s.category?.toLowerCase().includes("hiring") || s.signal_type?.includes("hiring")).length,
-    expansion: signals.filter(s => s.category?.toLowerCase().includes("expansion") || s.signal_type?.includes("expansion")).length,
-  };
-
-  const signalChartData = [
-    { name: "Funding", count: signalTypes.funding || 4 },
-    { name: "Hiring", count: signalTypes.hiring || 8 },
-    { name: "Expansion", count: signalTypes.expansion || 6 }
-  ];
-
-  const urgencyCounts = {
-    High: opportunities.filter(o => o.urgency === "High").length || 3,
-    Medium: opportunities.filter(o => o.urgency === "Medium").length || 5,
-    Low: opportunities.filter(o => o.urgency === "Low").length || 2
-  };
-
-  const pieData = [
-    { name: "High Urgency", value: urgencyCounts.High, color: "#ef4444" },
-    { name: "Medium Urgency", value: urgencyCounts.Medium, color: "#f59e0b" },
-    { name: "Low Urgency", value: urgencyCounts.Low, color: "#3b82f6" }
-  ];
-
   const topMetrics = [
     { label: "Total Leads", value: totalLeads || stats?.total_leads || 0, icon: Users, color: "blue", change: "+12%" },
     { label: "Verified Leads", value: verifiedLeads || Math.round((totalLeads || 0) * 0.7), icon: CheckCircle, color: "emerald", change: "+8%" },
@@ -144,7 +112,7 @@ export default function DashboardPage() {
     { label: "Meetings Booked", value: meetingsBooked || 0, icon: Calendar, color: "rose", change: "This month" },
   ];
 
-  const topOpportunity = opportunities.sort((a,b) => b.confidence_score - a.confidence_score)[0];
+  const topLead = [...leads].sort((a, b) => (b.score || 0) - (a.score || 0))[0];
 
   const cardStyle: React.CSSProperties = {
     background: 'var(--card-bg)',
@@ -336,10 +304,8 @@ export default function DashboardPage() {
             </div>
           );
         })}
-      </div>
-
-      {/* AI Insights & Urgency */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+      </div>      {/* AI Insights */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
         {/* AI Insights */}
         <div style={{ ...cardStyle, padding: '20px 24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid var(--card-border)' }}>
@@ -357,7 +323,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <h2 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--foreground-color)', margin: 0 }}>Autonomous AI Insights</h2>
-                <p style={{ fontSize: '11px', color: 'var(--sidebar-text-muted)', margin: 0 }}>Powered by real-time signal processing</p>
+                <p style={{ fontSize: '11px', color: 'var(--sidebar-text-muted)', margin: 0 }}>Powered by platform performance analytics</p>
               </div>
             </div>
             <span style={{
@@ -381,8 +347,8 @@ export default function DashboardPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             {[
               { label: 'HIGH INTENT LEADS', value: `${highIntentLeads} lead${highIntentLeads !== 1 ? 's' : ''}`, sub: 'Scoring > 80 opportunity intent matrix', color: '#7c5cff', icon: Target },
-              { label: 'HIGHEST URGENCY', value: `${topOpportunity?.lead?.name || 'Rahul Sharma'}`, sub: `${topOpportunity?.lead?.company || 'SaaSify'} · Next target contact`, color: '#ef4444', icon: Activity },
-              { label: 'RECOMMENDED STRATEGY', value: 'Personalize with Hiring Signals', sub: 'Trigger outreach utilizing newly scraped signals', color: '#f59e0b', icon: Zap },
+              { label: 'TOP LEAD TARGET', value: topLead ? topLead.name : 'No Leads Found', sub: topLead ? `${topLead.company || 'Platform'} · Lead Score: ${topLead.score || 0}` : 'Add leads to view metrics', color: '#ef4444', icon: Activity },
+              { label: 'RECOMMENDED STRATEGY', value: 'Personalized Email Sequence', sub: 'Execute follow-up templates dynamically based on lead engagement', color: '#f59e0b', icon: Zap },
               { label: 'TOP CAMPAIGN', value: stats?.total_campaigns > 0 ? 'Enterprise Q2 Sequence' : 'Autonomous Discovery', sub: 'Highest open and reply rate this week', color: '#10b981', icon: BarChart2 },
             ].map((item) => {
               const IconComp = item.icon;
@@ -409,78 +375,6 @@ export default function DashboardPage() {
                 </div>
               );
             })}
-          </div>
-        </div>
-
-        {/* Opportunity Urgency Pie */}
-        <div style={{ ...cardStyle, padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid var(--card-border)' }}>
-            <div style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(245,158,11,0.05))',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <TrendingUp size={16} color="#f59e0b" />
-            </div>
-            <h2 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--foreground-color)', margin: 0 }}>
-              Opportunity Urgency
-            </h2>
-          </div>
-
-          <div style={{ height: '170px', width: '100%', position: 'relative', flex: 1 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={48}
-                  outerRadius={68}
-                  paddingAngle={4}
-                  dataKey="value"
-                  strokeWidth={0}
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip content={({ active, payload }) => {
-                  if (active && payload?.length) {
-                    return (
-                      <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: 'var(--foreground-color)' }}>
-                        <p style={{ fontWeight: 600, margin: 0 }}>{payload[0].name}</p>
-                        <p style={{ color: payload[0].payload.color, margin: 0 }}>{payload[0].value} opportunities</p>
-                      </div>
-                    );
-                  }
-                  return null;
-                }} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-              <span style={{ fontSize: '26px', fontWeight: '800', color: 'var(--foreground-color)', lineHeight: '1' }}>
-                {opportunities.length || 10}
-              </span>
-              <span style={{ fontSize: '10px', color: 'var(--sidebar-text-muted)', fontWeight: '600', letterSpacing: '0.06em', marginTop: '3px' }}>
-                EVALUATIONS
-              </span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
-            {pieData.map((d) => (
-              <div key={d.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: d.color, flexShrink: 0 }} />
-                  <span style={{ color: 'var(--sidebar-text-muted)' }}>{d.name.replace(' Urgency', '')}</span>
-                </div>
-                <span style={{ fontWeight: '600', color: 'var(--foreground-color)' }}>{d.value}</span>
-              </div>
-            ))}
           </div>
         </div>
       </div>
@@ -605,45 +499,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Charts & Quick Actions */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        {/* Signals Bar Chart */}
-        <div style={{ ...cardStyle, padding: '20px 24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid var(--card-border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, rgba(124,92,255,0.2), rgba(124,92,255,0.05))',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}>
-                <Brain size={16} color="#7c5cff" />
-              </div>
-              <h2 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--foreground-color)', margin: 0 }}>Buying Signals</h2>
-            </div>
-            <Link href="/dashboard/signals" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: '600', color: '#7c5cff', textDecoration: 'none' }}>
-              View All <ArrowRight size={13} />
-            </Link>
-          </div>
-
-          <div style={{ height: '200px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={signalChartData} barGap={4}>
-                <XAxis dataKey="name" stroke="var(--sidebar-text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--sidebar-text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="count" radius={[6, 6, 0, 0]} barSize={48}>
-                  {signalChartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={index === 0 ? '#7c5cff' : index === 1 ? '#8b5cf6' : '#a78bfa'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
         {/* Quick Actions + Activity */}
         <div style={{ ...cardStyle, padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div>
@@ -655,7 +511,7 @@ export default function DashboardPage() {
                 { href: '/dashboard/leads-discovery', label: 'Discover Leads', icon: Users, color: '#7c5cff', bg: 'rgba(124,92,255,0.1)' },
                 { href: '/dashboard/campaigns', label: 'New Campaign', icon: Megaphone, color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' },
                 { href: '/dashboard/chatbot', label: 'AI Outreach', icon: Brain, color: '#6366f1', bg: 'rgba(99,102,241,0.1)' },
-                { href: '/dashboard/linkedin', label: 'LinkedIn', icon: Linkedin, color: '#10b981', bg: 'rgba(16,185,129,0.1)' },
+                { href: '/dashboard/settings', label: 'Settings', icon: Settings, color: '#10b981', bg: 'rgba(16,185,129,0.1)' },
               ].map((qa) => {
                 const QAIcon = qa.icon;
                 return (

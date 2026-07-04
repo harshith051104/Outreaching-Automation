@@ -80,19 +80,36 @@ class CampaignWorker:
         db = await get_database()
         
         if not campaign_id:
-            # Fallback: select most recent draft/paused campaign
+            # Try context fallback first
+            campaign_id = context.get("campaign_id", "")
+        
+        if not campaign_id:
+            # Fallback: select most recent draft/paused campaign for this user
             campaign = await db.campaigns.find_one(
                 {"user_id": user_id, "status": {"$in": ["draft", "paused"]}},
                 sort=[("created_at", -1)]
             )
             if campaign:
                 campaign_id = campaign["id"]
-                
+                logger.info(f"CampaignWorker: Auto-selected campaign '{campaign.get('name')}' (id={campaign_id}) for start")
+
         if not campaign_id:
             return {"status": "failed", "error": "No draft or paused campaign found to start."}
+        
+        # Verify campaign exists and belongs to user before calling db_start_campaign
+        verify = await db.campaigns.find_one({"id": campaign_id, "user_id": user_id})
+        if not verify:
+            return {"status": "failed", "error": f"Campaign '{campaign_id}' not found or access denied."}
             
-        campaign = await db_start_campaign(campaign_id=campaign_id, user_id=user_id)
-        return {"status": "success", "campaign": campaign}
+        if verify.get("status") == "active":
+            return {"status": "already_active", "campaign": verify}
+        
+        try:
+            campaign = await db_start_campaign(campaign_id=campaign_id, user_id=user_id)
+            return {"status": "success", "campaign": campaign}
+        except Exception as e:
+            logger.error(f"CampaignWorker.start_campaign failed: {e}")
+            return {"status": "failed", "error": str(e)}
 
     @classmethod
     async def pause_campaign(cls, user_id: str, args: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,16 +150,13 @@ class LeadWorker:
 
     @classmethod
     async def import_leads(cls, user_id: str, args: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Import leads from a CSV / Google Sheets URL."""
+        """Import leads from a CSV / Google Sheets URL, or add manual leads."""
         from app.services.linkedin_csv_import_service import import_leads_from_csv
         
         file_url = args.get("file_url", "")
         # Google Sheet URL detection
         if not file_url and args.get("sheet_url"):
             file_url = args["sheet_url"]
-            
-        if not file_url:
-            return {"status": "failed", "error": "No file_url or sheet_url provided for import"}
             
         campaign_id = args.get("campaign_id", "")
         if not campaign_id:
@@ -159,41 +173,92 @@ class LeadWorker:
             if camp:
                 campaign_id = camp["id"]
 
-        file_content = None
-        filename = file_url.split("/")[-1]
-
-        # Fast path check for local download
-        local_match = re.search(r"/api/files/([^/]+)/download", file_url)
-        if local_match:
-            file_id = local_match.group(1)
-            file_doc = await db.uploaded_files.find_one({"id": file_id})
-            if file_doc and file_doc.get("file_path"):
-                path = file_doc["file_path"]
-                if os.path.exists(path):
-                    with open(path, "rb") as f:
-                        file_content = f.read()
-                    filename = file_doc.get("original_filename", filename)
-                else:
-                    return {"status": "failed", "error": f"Uploaded file not found on disk: {path}"}
-            else:
-                return {"status": "failed", "error": f"File record not found for id: {file_id}"}
-
-        # Fallback to fetching URL
-        if file_content is None:
-            import httpx
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                response = await client.get(file_url, timeout=30.0)
-                if response.status_code != 200:
-                    return {"status": "failed", "error": f"Failed to fetch sheet/file from URL: {response.status_code}"}
-                file_content = response.content
-
-        result = await import_leads_from_csv(
-            csv_content=file_content,
-            user_id=user_id,
-            campaign_id=campaign_id if campaign_id else None,
-            create_leads=True
-        )
+        # Support manual leads list in prompt (either raw dicts or comma-separated string)
+        manual_leads = args.get("leads")
+        added = []
+        total_rows = 0
+        valid_leads = 0
+        leads_created = 0
+        filename = "manual_input"
         
+        if manual_leads:
+            from app.services.lead_service import create_lead
+            from app.schemas.lead import LeadCreate
+            
+            if isinstance(manual_leads, str):
+                # comma/newline separated emails
+                emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', manual_leads)
+                manual_leads = [{"email": email} for email in emails]
+            elif isinstance(manual_leads, dict):
+                manual_leads = [manual_leads]
+                
+            for item in manual_leads:
+                email = item.get("email", "").strip()
+                if not email:
+                    continue
+                name = item.get("name", "").strip() or email.split("@")[0]
+                
+                try:
+                    lead_obj = LeadCreate(
+                        campaign_id=campaign_id,
+                        email=email,
+                        name=name,
+                        company=item.get("company", "") or "",
+                        role=item.get("role", "") or ""
+                    )
+                    res = await create_lead(user_id, lead_obj)
+                    added.append(res)
+                    leads_created += 1
+                    valid_leads += 1
+                except Exception as e:
+                    logger.info(f"Skipping duplicate/invalid manual lead {email}: {e}")
+            total_rows += len(manual_leads)
+
+        if file_url:
+            filename = file_url.split("/")[-1]
+            file_content = None
+
+            # Fast path check for local download
+            local_match = re.search(r"/api/files/([^/]+)/download", file_url)
+            if local_match:
+                file_id = local_match.group(1)
+                file_doc = await db.uploaded_files.find_one({"id": file_id})
+                if file_doc and file_doc.get("file_path"):
+                    path = file_doc["file_path"]
+                    if os.path.exists(path):
+                        with open(path, "rb") as f:
+                            file_content = f.read()
+                        filename = file_doc.get("original_filename", filename)
+                    else:
+                        return {"status": "failed", "error": f"Uploaded file not found on disk: {path}"}
+                else:
+                    return {"status": "failed", "error": f"File record not found for id: {file_id}"}
+
+            # Fallback to fetching URL
+            if file_content is None:
+                import httpx
+                async with httpx.AsyncClient(follow_redirects=True) as client:
+                    response = await client.get(file_url, timeout=30.0)
+                    if response.status_code != 200:
+                        return {"status": "failed", "error": f"Failed to fetch sheet/file from URL: {response.status_code}"}
+                    file_content = response.content
+
+            result = await import_leads_from_csv(
+                csv_content=file_content,
+                user_id=user_id,
+                campaign_id=campaign_id if campaign_id else None,
+                create_leads=True
+            )
+            
+            total_rows += result["total_rows"]
+            valid_leads += result["valid_leads"]
+            leads_created += result.get("leads_created", 0)
+            if result.get("leads"):
+                added.extend(result["leads"])
+
+        if not file_url and not manual_leads:
+            return {"status": "failed", "error": "No file_url, sheet_url, or manual leads list provided for import"}
+
         # Auto-update the campaign lead count in context/db
         if campaign_id:
             total_leads = await db.leads.count_documents({"campaign_id": campaign_id})
@@ -205,10 +270,10 @@ class LeadWorker:
         return {
             "status": "success",
             "filename": filename,
-            "total_rows": result["total_rows"],
-            "valid_leads": result["valid_leads"],
-            "leads_created": result.get("leads_created", 0),
-            "leads": result["leads"][:10] if result.get("leads") else []
+            "total_rows": total_rows,
+            "valid_leads": valid_leads,
+            "leads_created": leads_created,
+            "leads": added[:10]
         }
 
 

@@ -131,6 +131,14 @@ async def _execute_campaign_async(campaign_id: str) -> dict:
             logger.exception("Failed to process lead %s: %s", lead["id"], exc)
             results.append({"lead_id": lead["id"], "status": "error", "error": str(exc)})
 
+    # Immediately process delay-0 tasks so first email goes out right away
+    # (not waiting up to 30s for celery beat to trigger)
+    try:
+        from app.services.task_scheduler_service import TaskSchedulerService
+        await TaskSchedulerService.process_pending_tasks()
+        logger.info("Campaign %s: Triggered immediate processing of delay-0 tasks", campaign_id)
+    except Exception as proc_err:
+        logger.warning("Campaign %s: Failed to trigger immediate task processing: %s", campaign_id, proc_err)
 
     return {
         "status": "processed",

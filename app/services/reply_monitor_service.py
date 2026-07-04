@@ -75,6 +75,16 @@ async def generate_draft_response(reply_id: str, gmail_account_id: Optional[str]
     if not reply:
         raise ValueError(f"Reply {reply_id} not found")
 
+    user_id = None
+    if gmail_account_id:
+        gmail_account = await db.gmail_accounts.find_one({"id": gmail_account_id})
+        if gmail_account:
+            user_id = gmail_account.get("user_id")
+    if not user_id and reply.get("campaign_id"):
+        campaign = await db.campaigns.find_one({"id": reply["campaign_id"]})
+        if campaign:
+            user_id = campaign.get("user_id")
+
     lead = None
     if reply.get("lead_id"):
         lead = await db.leads.find_one({"id": reply["lead_id"]})
@@ -130,6 +140,7 @@ async def generate_draft_response(reply_id: str, gmail_account_id: Optional[str]
             reply_text=reply.get("snippet", reply.get("body", "")),
             original_email=original_email.get("subject", "") if original_email else "",
             lead_context=lead_context,
+            user_id=user_id,
         )
     except Exception as exc:
         logger.warning("Reply classification failed: %s", exc)
@@ -159,6 +170,7 @@ async def generate_draft_response(reply_id: str, gmail_account_id: Optional[str]
                 "reply_snippet": reply.get("snippet", ""),
                 "classification": classification.get("classification") if classification else "unknown",
             },
+            user_id=user_id,
         )
     except Exception as exc:
         import traceback

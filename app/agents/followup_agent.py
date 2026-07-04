@@ -28,6 +28,7 @@ def generate_followup(
     lead_data: dict,
     sequence_number: int,
     engagement_data: dict,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Generate a follow-up email framework-freely.
@@ -163,7 +164,7 @@ Return your output strictly as a JSON object matching this structure:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        raw_output = groq_inference(messages, temperature=0.5)
+        raw_output = groq_inference(messages, temperature=0.5, user_id=user_id)
         parsed = _extract_json(raw_output)
         logger.info("Follow-up generation completed framework-freely — JSON parsed successfully.")
         return parsed

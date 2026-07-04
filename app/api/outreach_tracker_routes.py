@@ -169,11 +169,10 @@ async def get_tracker_leads(
 @router.get("/team-progress")
 async def team_progress(
     campaign_id: str | None = Query(None),
-    current_user: dict = Depends(get_manager_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Aggregate outreach milestone completion stats per team member.
-    Requires manager or admin role.
     """
     return await get_team_progress(campaign_id=campaign_id)
 

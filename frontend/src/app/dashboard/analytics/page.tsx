@@ -5,7 +5,6 @@ import { getCampaigns } from "@/services/campaign-api";
 import {
   getCampaignAnalytics,
   getDailyStats,
-  getCampaignInsights,
   exportCampaignAnalyticsToSheets,
 } from "@/services/analytics-api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -21,9 +20,7 @@ export default function AnalyticsPage() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState<string | null>(null);
 
-  // AI Insights State
-  const [insights, setInsights] = useState<any>(null);
-  const [insightsLoading, setInsightsLoading] = useState(false);
+
 
   // Sheets Export State
   const [exporting, setExporting] = useState(false);
@@ -84,22 +81,17 @@ export default function AnalyticsPage() {
 
   const loadCampaignStats = async (campaignId: string) => {
     setStatsLoading(true);
-    setInsightsLoading(true);
-    setInsights(null);
     try {
-      const [analyticsData, dailyBreakdown, insightsData] = await Promise.all([
+      const [analyticsData, dailyBreakdown] = await Promise.all([
         getCampaignAnalytics(campaignId),
-        getDailyStats(campaignId),
-        getCampaignInsights(campaignId).catch(() => null)
+        getDailyStats(campaignId)
       ]);
       setStats(analyticsData);
       setDailyData(dailyBreakdown);
-      setInsights(insightsData);
     } catch (err) {
       console.error("Failed to load campaign statistics:", err);
     } finally {
       setStatsLoading(false);
-      setInsightsLoading(false);
     }
   };
 
@@ -335,133 +327,7 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
-          {/* AI Insights and Recommendations */}
-          <div style={cardStyle} className="p-6 shadow-sm space-y-6">
-            <div style={{ borderColor: 'var(--card-border)' }} className="flex items-center justify-between border-b pb-3">
-              <div>
-                <h2 className="text-lg font-bold text-[var(--foreground-color)] flex items-center gap-2">
-                  <svg className="h-5 w-5 text-[var(--primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                  </svg>
-                  <span>AI-Driven Optimization & Campaign Insights</span>
-                </h2>
-                <p className="text-xs text-[var(--sidebar-text-muted)] mt-0.5">Strategic campaign performance breakdown and cross-campaign learning history.</p>
-              </div>
-              {insights?.summary?.performance_grade && (
-                <span className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-extrabold shadow-sm ${
-                  insights.summary.performance_grade === "A" ? "bg-green-500/10 text-green-400 border border-green-500/20" :
-                  insights.summary.performance_grade === "B" ? "bg-blue-500/10 text-blue-400 border border-blue-500/20" :
-                  insights.summary.performance_grade === "C" ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20" :
-                  "bg-red-500/10 text-red-400 border border-red-500/20"
-                }`}>
-                  Grade: {insights.summary.performance_grade}
-                </span>
-              )}
-            </div>
 
-            {insightsLoading ? (
-              <div className="flex flex-col items-center justify-center py-10 space-y-2">
-                <div className="h-6 w-6 animate-spin rounded-full border-4 border-[var(--primary)] border-t-transparent"></div>
-                <p className="text-xs text-[var(--sidebar-text-muted)]">Consulting campaign learning memory and performance analyst...</p>
-              </div>
-            ) : insights ? (
-              <div className="space-y-6">
-                
-                {/* Executive Summary */}
-                {insights.summary?.overview && (
-                  <div style={{ background: 'var(--sidebar-toggle-bg)', borderColor: 'var(--card-border)' }} className="p-4 border rounded-xl">
-                    <div className="text-xs font-bold text-[var(--sidebar-text-muted)] uppercase tracking-wider mb-1.5">Executive Summary</div>
-                    <p className="text-sm text-[var(--foreground-color)]/90 leading-relaxed">{insights.summary.overview}</p>
-                  </div>
-                )}
-
-                {/* Campaign Comparison Section */}
-                {insights.campaign_comparison && (
-                  <div className="rounded-xl border border-[var(--primary)]/20 bg-[var(--primary)]/5 p-4 space-y-3">
-                    <div className="flex items-center gap-1.5">
-                      <svg className="h-4.5 w-4.5 text-[var(--primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                      </svg>
-                      <span className="text-xs font-bold text-[var(--primary)] uppercase tracking-wider">Comparative Insights (Campaign vs Campaigns)</span>
-                    </div>
-                    <p className="text-xs text-[var(--foreground-color)]/95 leading-relaxed">{insights.campaign_comparison.comparison_summary || "No comparison data loaded."}</p>
-                    {insights.campaign_comparison.key_differentiators && insights.campaign_comparison.key_differentiators.length > 0 && (
-                      <ul className="list-disc pl-5 text-xs text-[var(--foreground-color)]/90 space-y-1 mt-2">
-                        {insights.campaign_comparison.key_differentiators.map((diff: string, i: number) => (
-                          <li key={i}>{diff}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
-                {/* Learning Memory Insights */}
-                {insights.learning_memory_insights && (
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4">
-                      <div className="text-[10px] font-bold text-green-500 uppercase tracking-wider mb-2">Lessons Applied (From Learning Memory)</div>
-                      {insights.learning_memory_insights.lessons_applied && insights.learning_memory_insights.lessons_applied.length > 0 ? (
-                        <ul className="list-disc pl-4 text-xs text-[var(--foreground-color)]/90 space-y-1">
-                          {insights.learning_memory_insights.lessons_applied.map((l: string, i: number) => (
-                            <li key={i}>{l}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-xs text-[var(--sidebar-text-muted)]">No past campaign lessons were applied yet.</p>
-                      )}
-                    </div>
-                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-                      <div className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-2">New Learnings Recorded</div>
-                      {insights.learning_memory_insights.new_insights_recorded && insights.learning_memory_insights.new_insights_recorded.length > 0 ? (
-                        <ul className="list-disc pl-4 text-xs text-[var(--foreground-color)]/90 space-y-1">
-                          {insights.learning_memory_insights.new_insights_recorded.map((l: string, i: number) => (
-                            <li key={i}>{l}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-xs text-[var(--sidebar-text-muted)]">No new lessons recorded in this cycle.</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Recommendations */}
-                {insights.recommendations && insights.recommendations.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="text-xs font-bold text-[var(--sidebar-text-muted)] uppercase tracking-wider">Strategic Recommendations</div>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      {insights.recommendations.map((rec: any, i: number) => (
-                        <div key={i} style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }} className="rounded-xl border p-4 shadow-sm space-y-2 hover:shadow transition-shadow">
-                          <div className="flex items-center justify-between">
-                            <span className="inline-flex items-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)] px-2 py-0.5 text-[10px] font-extrabold uppercase border border-[var(--primary)]/20">
-                              Priority #{rec.priority || i + 1}
-                            </span>
-                            <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${
-                              rec.effort === "low" ? "bg-green-500/10 text-green-500 border border-green-500/20" :
-                              rec.effort === "medium" ? "bg-amber-500/10 text-amber-500 border border-amber-500/20" :
-                              "bg-red-500/10 text-red-500 border border-red-500/20"
-                            }`}>
-                              {rec.effort} Effort
-                            </span>
-                          </div>
-                          <p className="text-xs font-bold text-[var(--foreground-color)] leading-tight">{rec.action}</p>
-                          <div style={{ borderColor: 'var(--card-border)' }} className="text-[10px] text-[var(--sidebar-text-muted)] pt-1.5 border-t">
-                            <div>Impact: <span className="font-semibold text-[var(--foreground-color)]">{rec.expected_impact}</span></div>
-                            {rec.timeline && <div className="mt-0.5">Timeline: <span className="font-semibold text-[var(--foreground-color)]">{rec.timeline}</span></div>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-              </div>
-            ) : (
-              <div className="text-center py-6 text-xs text-[var(--sidebar-text-muted)]">
-                Insights could not be generated or parsed for this campaign.
-              </div>
-            )}
-          </div>
         </>
       )}
     </div>

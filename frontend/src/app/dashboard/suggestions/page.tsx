@@ -320,24 +320,26 @@ export default function SuggestionsPage() {
 
         {/* Quick Filters Row */}
         <div className="flex flex-wrap gap-2.5 items-center text-xs">
-          <span className="font-bold text-slate-400 uppercase tracking-widest text-[10px]">Quick Filters:</span>
+          <span className="font-bold uppercase tracking-widest text-[10px]" style={{ color: "var(--sidebar-text-muted)" }}>Quick Filters:</span>
           <button
             onClick={() => setActiveSubmittedFrom(activeSubmittedFrom === "widget" ? "" : "widget")}
-            className={`px-3 py-1 rounded-full border transition-all cursor-pointer font-bold uppercase tracking-wider text-[9px] ${
-              activeSubmittedFrom === "widget"
-                ? "bg-indigo-650 text-white border-indigo-500"
-                : "bg-slate-800/40 text-slate-400 border-slate-700/60 hover:text-slate-200"
-            }`}
+            className="px-3 py-1 rounded-full border transition-all cursor-pointer font-bold uppercase tracking-wider text-[9px] hover:opacity-90"
+            style={{
+              background: activeSubmittedFrom === "widget" ? "var(--primary)" : "var(--sidebar-toggle-bg)",
+              color: activeSubmittedFrom === "widget" ? "#fff" : "var(--sidebar-text-muted)",
+              borderColor: activeSubmittedFrom === "widget" ? "var(--primary)" : "var(--card-border)",
+            }}
           >
             Widget Submissions
           </button>
           <button
             onClick={() => setActiveAnonymous(activeAnonymous === true ? undefined : true)}
-            className={`px-3 py-1 rounded-full border transition-all cursor-pointer font-bold uppercase tracking-wider text-[9px] ${
-              activeAnonymous === true
-                ? "bg-slate-750 text-white border-slate-650"
-                : "bg-slate-800/40 text-slate-400 border-slate-700/60 hover:text-slate-200"
-            }`}
+            className="px-3 py-1 rounded-full border transition-all cursor-pointer font-bold uppercase tracking-wider text-[9px] hover:opacity-90"
+            style={{
+              background: activeAnonymous === true ? "var(--primary)" : "var(--sidebar-toggle-bg)",
+              color: activeAnonymous === true ? "#fff" : "var(--sidebar-text-muted)",
+              borderColor: activeAnonymous === true ? "var(--primary)" : "var(--card-border)",
+            }}
           >
             Anonymous Only
           </button>

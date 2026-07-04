@@ -19,6 +19,7 @@ def classify_reply(
     reply_text: str,
     original_email: str,
     lead_context: dict,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Classify an email reply framework-freely.
@@ -27,6 +28,7 @@ def classify_reply(
         reply_text: The reply email text.
         original_email: The original outreach email.
         lead_context: Context about the lead.
+        user_id: The ID of the user owning the campaign.
 
     Returns:
         Classification result as a dictionary.
@@ -36,7 +38,7 @@ def classify_reply(
     role = lead_context.get("role", "Unknown")
     current_score = lead_context.get("lead_score", 50)
 
-    logger.info(f"Classifying reply framework-freely from: {lead_name}")
+    logger.info(f"Classifying reply framework-freely from: {lead_name} for user={user_id}")
 
     system_prompt = (
         "You are a Reply Intent Classifier sales NLP expert. You specialize in B2B sales communication analysis "
@@ -113,7 +115,7 @@ Return your output strictly as a JSON object matching this structure:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        raw_output = groq_inference(messages, temperature=0.3)
+        raw_output = groq_inference(messages, temperature=0.3, user_id=user_id)
         parsed = _extract_json(raw_output)
         logger.info("Reply classification completed framework-freely — JSON parsed successfully.")
         return parsed

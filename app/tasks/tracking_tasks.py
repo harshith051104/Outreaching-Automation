@@ -105,6 +105,7 @@ async def _poll_campaign_replies(campaign: dict) -> int:
                     "role": lead.get("title", "") if lead else "",
                     "lead_score": lead.get("engagement_score", 50) if lead else 50,
                 },
+                user_id=campaign_owner,
             )
 
             await db.replies.update_one(

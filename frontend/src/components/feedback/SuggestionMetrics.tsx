@@ -50,23 +50,27 @@ export default function SuggestionMetrics({ suggestions }: SuggestionMetricsProp
         return (
           <div
             key={i}
-            className="rounded-2xl p-5 border border-slate-800 bg-slate-900/60 shadow-lg relative overflow-hidden flex flex-col justify-between"
+            className="rounded-2xl p-5 border shadow-lg relative overflow-hidden flex flex-col justify-between hover:shadow-md transition-shadow"
+            style={{
+              background: "var(--card-bg)",
+              borderColor: "var(--card-border)",
+            }}
           >
             {/* Subtle background glow */}
             <div className={`absolute -right-8 -top-8 h-24 w-24 opacity-5 rounded-full blur-2xl pointer-events-none bg-gradient-to-br ${c.color}`} />
             
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--sidebar-text-muted)" }}>
                 {c.title}
               </span>
               <Icon className={`h-5 w-5 ${c.iconColor}`} />
             </div>
 
             <div className="mt-3.5 space-y-0.5">
-              <span className="text-2xl font-black tracking-tight text-white leading-none">
+              <span className="text-2xl font-black tracking-tight leading-none" style={{ color: "var(--foreground-color)" }}>
                 {c.value}
               </span>
-              <p className="text-[10px] text-slate-400 font-semibold leading-relaxed">
+              <p className="text-[10px] font-semibold leading-relaxed" style={{ color: "var(--sidebar-text-muted)" }}>
                 {c.desc}
               </p>
             </div>

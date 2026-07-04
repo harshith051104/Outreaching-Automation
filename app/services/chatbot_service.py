@@ -2515,6 +2515,95 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
 
 # ── Main chat handler ──────────────────────────────────────────────────────
 
+# Patterns that indicate the user wants a normal conversation, not platform actions
+_CONVERSATIONAL_PATTERNS = [
+    r"^(hi|hello|hey|good morning|good afternoon|good evening|greetings|howdy|yo)\s*[!.]?\s*$",
+    r"^(hi|hello|hey)\s*,\s*$",
+    r"how are you",
+    r"what('?s| is) up",
+    r"what can you do",
+    r"who are you",
+    r"help me",
+    r"thanks?( you)?",
+    r"thank you",
+    r"please (help|explain|tell)",
+    r"what do you think",
+    r"can you help",
+    r"i need (some |a little )?help",
+    r"good job",
+    r"nice",
+    r"cool",
+    r"awesome",
+    r"(that('?s| is) )?great",
+    r"(that('?s| is) )?good",
+    r"(that('?s| is) )?ok(ay)?",
+    r"see you",
+    r"bye",
+    r"goodbye",
+    r"cheers",
+    r"well done",
+    r"perfect",
+]
+
+# Platform action keywords that indicate user wants to do something with the platform
+_ACTION_KEYWORDS = [
+    "create", "start", "stop", "pause", "resume", "delete", "remove",
+    "send", "schedule", "campaign", "lead", "email", "message",
+    "import", "export", "list", "show", "get", "add", "update",
+    "generate", "analyze", "research", "find", "search", "track",
+]
+
+
+def _is_conversational_message(message: str) -> bool:
+    """Fast pre-check if a message is conversational (not a platform action)."""
+    msg_lower = message.lower().strip()
+    if not msg_lower or len(msg_lower) > 500:
+        return False
+    import re
+    for pattern in _CONVERSATIONAL_PATTERNS:
+        if re.search(pattern, msg_lower, re.IGNORECASE):
+            return True
+    action_word_count = sum(1 for kw in _ACTION_KEYWORDS if kw in msg_lower)
+    if action_word_count == 0:
+        return True
+    return False
+
+
+async def _generate_conversational_response(
+    user_id: str,
+    message: str,
+    conversation_history: List[Dict[str, str]],
+    llm_provider: str,
+    llm_model: str,
+    api_key: str,
+) -> str:
+    """Generate a direct conversational response using LLM without orchestrator."""
+    from app.services.llm_manager import LLMManager
+    
+    system_prompt = """You are "Elly", a friendly and helpful AI assistant for the AI Outreach Platform.
+You are conversational, professional, and warm. You help users with their outreach campaigns but also engage in natural friendly conversation.
+Keep responses concise, friendly, and personable. Do NOT use emojis.
+If the user asks about platform capabilities, you can briefly mention what you can help with (creating campaigns, managing leads, sending emails, etc.) but don't give long lists unless asked."""
+    
+    history = conversation_history or []
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history[-10:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": message})
+    
+    try:
+        completion = await LLMManager.generate_completion(
+            task_type="CONVERSATIONAL",
+            messages=messages,
+            user_id=user_id,
+            temperature=0.7
+        )
+        return completion.get("content", "Hello! How can I help you today?")
+    except Exception as e:
+        logger.warning(f"Conversational LLM call failed: {e}")
+        return "Hello! I'm here to help. You can ask me to create campaigns, manage leads, send emails, or just chat. What would you like to do?"
+
+
 async def handle_chatbot_chat(
     user_id: str,
     message: str,
@@ -2573,28 +2662,69 @@ async def handle_chatbot_chat(
             "actions_taken": []
         }
 
+    # Fast conversational check: if message is clearly a greeting or casual conversation
+    # (not a platform action), skip orchestrator and respond directly
+    if _is_conversational_message(message):
+        conversational_response = await _generate_conversational_response(
+            user_id=user_id,
+            message=message,
+            conversation_history=conversation_history,
+            llm_provider=active_provider,
+            llm_model=active_model,
+            api_key=api_key,
+        )
+        return {
+            "response": conversational_response,
+            "actions_taken": [],
+            "pending_approval": None
+        }
+
+    # Try rule-based fallback first for simple commands if message is short and doesn't contain email templates.
+    # This prevents the regex parser from intercepting complex prompts containing newlines/draft templates.
+    is_simple_command = len(message) < 300 and not any(k in message.lower() for k in ["subject:", "body:", "dear", "follow-up", "template", "\n\n"])
+    if is_simple_command:
+        rule_fallback = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
+        if rule_fallback:
+            logger.info("Rule-based fallback handled message: %s", message[:100])
+            return rule_fallback
 
     history = conversation_history or []
     planner_system_prompt = """You are the Lead Planning AI for the AI Outreach Platform.
 Your job is to analyze the user's prompt and generate a single structured Execution Plan in JSON format.
 
 You have access to the following Workers/Tools:
-1. "create_campaign": Creates a new campaign. Arguments: {name: str, description: Optional[str]}
+1. "create_campaign": Creates a new campaign. Arguments: {name: str, description: Optional[str], subject_template: Optional[str], body_template: Optional[str], sequence_steps: Optional[list[dict]]}
+   Note: Each dict in sequence_steps should contain: {step_number: int, channel: "email", delay_days: int, subject_template: str, body_template: str}
 2. "start_campaign": Starts an existing campaign. Arguments: {campaign_id: Optional[str]}
 3. "pause_campaign": Pauses a running campaign. Arguments: {campaign_id: Optional[str]}
-4. "update_campaign": Updates campaign fields or templates. Arguments: {campaign_id: Optional[str], subject_template: Optional[str], body_template: Optional[str]}
-5. "import_leads": Imports leads from a CSV or Google Sheets URL. Arguments: {campaign_id: Optional[str], file_url: Optional[str]}
+4. "update_campaign": Updates campaign fields or templates. Arguments: {campaign_id: Optional[str], name: Optional[str], description: Optional[str], subject_template: Optional[str], body_template: Optional[str], sequence_steps: Optional[list[dict]]}
+5. "import_leads": Imports leads from a CSV/Google Sheets URL OR adds manual leads listed in the prompt text. Arguments: {campaign_id: Optional[str], file_url: Optional[str], leads: Optional[list[dict]]}
+   Note: Each dict in leads should contain: {email: str, name: Optional[str], company: Optional[str], role: Optional[str]}
 6. "generate_batch_content": Generates all email templates, subjects, and email follow-up stages in one batch. Arguments: {campaign_name: str, description: str, vision: Optional[str], products: Optional[str], opportunity: Optional[str], impact: Optional[str], cta: Optional[str]}
 7. "sync_google_sheet": Synchronizes campaign leads with Google Sheets. Arguments: {campaign_id: Optional[str]}
 8. "notify_team": Sends a workspace notification. Arguments: {type: str, title: str, message: str}
 9. "log_timeline": Records an event on the activity timeline. Arguments: {event_type: str, description: str}
 
+CRITICAL RULES FOR TEMPLATES & FOLLOW-UPS:
+- If the user provides their own email template and/or follow-up steps in their prompt (e.g. they paste a "Subject", "Dear", "Follow-Up 1", etc.):
+  - You MUST parse those templates exactly as written by the user.
+  - Set the first template as the campaign's `subject_template` and `body_template`.
+  - Set any follow-up templates inside the campaign's `sequence_steps` argument.
+  - **DO NOT** include the "generate_batch_content" tool in the execution plan in this case. Simply pass the user's parsed copy directly to "create_campaign" or "update_campaign".
+- If the user does NOT provide any template copies or follow-ups in their prompt:
+  - You MUST include "generate_batch_content" in the execution plan to draft the copies dynamically based on the context.
+
+CRITICAL RULES FOR LEADS:
+- If the user provides a list of leads directly in the prompt text (e.g., individual email addresses, names, or roles mentioned in the prompt):
+  - You MUST include "import_leads" in the execution plan and pass those leads inside the "leads" argument as a list of dicts (e.g., [{"email": "harshith.electrawireless@gmail.com", "name": "Harshith"}]). Do NOT set "file_url" in this case.
+- If the user provides a CSV file, xlsx file, or Google Sheets URL:
+  - You MUST include "import_leads" and pass the file URL in the "file_url" argument.
+
 CRITICAL RULES:
 - If the user's prompt is a general greeting ("hi", "hello"), conversational question, or general query that does not ask to perform any platform action, set "is_conversational" to true, write a friendly response in "conversational_response", and leave "execution" empty.
 - If the prompt requires creating a campaign, importing leads, or generating sequence templates:
   - Include "create_campaign" first (if creating a new one).
-  - Include "import_leads" if a file/sheet is provided (make it depend on the campaign creation task id).
-  - Include "generate_batch_content" to draft templates (make it depend on the campaign creation task id).
+  - Include "import_leads" if a file/sheet is provided OR if manual leads are listed in the prompt text (make it depend on the campaign creation task id).
   - Include parallel tasks like "sync_google_sheet", "notify_team", and "log_timeline" with "parallel": true.
 - CRITICAL JSON COMPLIANCE: If you output any email templates, subject lines, or body text arguments in the JSON execution plan, you MUST escape all double quotes as \\\" and escape all newlines as \\n. The JSON must be strictly valid.
 - Do NOT use emojis in your response.
@@ -2612,7 +2742,18 @@ Your output must be strictly a JSON object matching this structure:
       "tool": "create_campaign",
       "arguments": {
         "name": "Market Stakeholder",
-        "description": "..."
+        "description": "...",
+        "subject_template": "...",
+        "body_template": "...",
+        "sequence_steps": [
+          {
+            "step_number": 1,
+            "channel": "email",
+            "delay_days": 3,
+            "subject_template": "Re: ...",
+            "body_template": "..."
+          }
+        ]
       }
     },
     {
@@ -2621,15 +2762,6 @@ Your output must be strictly a JSON object matching this structure:
       "depends_on": ["create_campaign_task"],
       "arguments": {
         "file_url": "https://..."
-      }
-    },
-    {
-      "id": "generate_content_task",
-      "tool": "generate_batch_content",
-      "depends_on": ["create_campaign_task"],
-      "arguments": {
-        "campaign_name": "Market Stakeholder",
-        "description": "..."
       }
     },
     {

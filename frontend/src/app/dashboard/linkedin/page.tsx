@@ -461,7 +461,7 @@ export default function LinkedInHubPage() {
       setCalendars((prev) => [newCal, ...prev]);
       setSelectedCalendar(newCal);
     } catch (err) {
-      setFormError("Failed to run LinkedIn Content Strategy Crew.");
+      setFormError("Failed to run LinkedIn Content Strategy Engine.");
     } finally {
       setGenerating(false);
     }
@@ -1331,7 +1331,7 @@ export default function LinkedInHubPage() {
               style={{ background: campaignSubTab === "content" ? "var(--card-bg)" : "transparent", color: campaignSubTab === "content" ? "var(--primary)" : "var(--sidebar-text-muted)" }}
               className="px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer"
             >
-              Content Strategy Crew
+              Content Strategy Agent
             </button>
           </div>
 
@@ -1569,7 +1569,7 @@ export default function LinkedInHubPage() {
                     Content Strategy Generator
                   </h2>
                   <p className="text-[11px] text-[var(--sidebar-text-muted)]">
-                    Activate the AI Strategy Crew to research your industry, structure marketing content pillars, and compile a tailored 7-day post schedule.
+                    Activate the AI Strategy Engine to research your industry, structure marketing content pillars, and compile a tailored 7-day post schedule.
                   </p>
                   
                   <form onSubmit={handleGenerate} className="space-y-3 text-xs">
@@ -1639,12 +1639,12 @@ export default function LinkedInHubPage() {
                       {generating ? (
                         <>
                           <Loader2 className="h-4.5 w-4.5 animate-spin" />
-                          Crew generating content calendar...
+                          Engine generating content calendar...
                         </>
                       ) : (
                         <>
                           <Sparkles className="h-4.5 w-4.5" />
-                          Execute Content Strategy Crew
+                          Execute Content Strategy Generator
                         </>
                       )}
                     </button>

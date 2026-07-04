@@ -693,91 +693,9 @@ export default function ChatbotPage() {
             </div>
           </div>
 
-          {/* Model Selection Dropdown */}
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="flex flex-col">
-              <label className="text-[9px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--sidebar-text-muted)" }}>
-                Provider
-              </label>
-              <select
-                value={llmProvider}
-                onChange={(e) => {
-                  const newProvider = e.target.value;
-                  setLlmProvider(newProvider);
-                  if (modelsData && modelsData[newProvider]) {
-                    setLlmModel(modelsData[newProvider].default_model);
-                  }
-                }}
-                className="text-xs font-semibold px-2 py-1 rounded-lg border outline-none cursor-pointer transition-all shadow-sm"
-                style={{
-                  background: "var(--sidebar-toggle-bg)",
-                  borderColor: "var(--card-border)",
-                  color: "var(--foreground-color)"
-                }}
-              >
-                {modelsData ? (
-                  Object.entries(modelsData).map(([key, val]: [string, any]) => (
-                    <option key={key} value={key} className="bg-[var(--card-bg)] text-[var(--foreground-color)] font-semibold">
-                      {val.name}
-                    </option>
-                  ))
-                ) : (
-                  <>
-                    <option value="nvidia">Nvidia NIM</option>
-                    <option value="groq">Groq</option>
-                    <option value="xiaomi">Xiaomi</option>
-                  </>
-                )}
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[9px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--sidebar-text-muted)" }}>
-                Model
-              </label>
-              <select
-                value={llmModel}
-                onChange={(e) => setLlmModel(e.target.value)}
-                className="text-xs font-semibold px-2 py-1 rounded-lg border outline-none cursor-pointer transition-all shadow-sm max-w-[170px] truncate"
-                style={{
-                  background: "var(--sidebar-toggle-bg)",
-                  borderColor: "var(--card-border)",
-                  color: "var(--foreground-color)"
-                }}
-              >
-                {modelsData && modelsData[llmProvider] ? (
-                  modelsData[llmProvider].models.map((m: any) => (
-                    <option key={m.id} value={m.id} title={m.name} className="bg-[var(--card-bg)] text-[var(--foreground-color)] font-semibold">
-                      {m.name}
-                    </option>
-                  ))
-                ) : (
-                  llmProvider === "nvidia" ? (
-                    <>
-                      <option value="moonshotai/kimi-k2.6">Kimi K2.6 (NIM)</option>
-                      <option value="nvidia/nemotron-3-ultra-550b-a55b">Nemotron 3 Ultra 550B (NIM)</option>
-                      <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B (NIM)</option>
-                      <option value="deepseek/deepseek-r1">DeepSeek R1 (NIM)</option>
-                    </>
-                  ) : llmProvider === "xiaomi" ? (
-                    <>
-                      <option value="mimo-v2.5">MiMo v2.5</option>
-                      <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
-                      <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
-                      <option value="llama3-8b-8192">Llama 3 8B (8192)</option>
-                    </>
-                  )
-                )}
-              </select>
-            </div>
-          </div>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden relative">
           {/* Chat Messages */}
           <div className="flex flex-1 flex-col overflow-hidden" style={{ background: "var(--card-bg)" }}>
             <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
@@ -978,8 +896,31 @@ export default function ChatbotPage() {
             </form>
           </div>
 
+          {/* Minimize Sidebar Button */}
+          <button
+            type="button"
+            onClick={() => setShowSidebar(!showSidebar)}
+            className="hidden lg:flex absolute top-4 z-20 items-center justify-center w-6 h-6 rounded-md border border-[var(--card-border)] bg-[var(--sidebar-toggle-bg)] text-[var(--sidebar-text-muted)] hover:text-[var(--foreground-color)] shadow-sm cursor-pointer transition-all duration-300"
+            style={{
+              right: showSidebar ? "336px" : "16px",
+            }}
+            title={showSidebar ? "Minimize Actions Logged" : "Expand Actions Logged"}
+          >
+            {showSidebar ? ">" : "<"}
+          </button>
+
           {/* Actions Sidebar */}
-          <div className="w-80 p-6 overflow-y-auto hidden lg:block" style={{ borderLeft: "1px solid var(--card-border)", background: "var(--sidebar-toggle-bg)" }}>
+          <div 
+            className="overflow-y-auto hidden lg:block transition-all duration-300 ease-in-out" 
+            style={{ 
+              width: showSidebar ? "320px" : "0px",
+              padding: showSidebar ? "24px" : "0px",
+              borderLeft: showSidebar ? "1px solid var(--card-border)" : "none", 
+              background: "var(--sidebar-toggle-bg)",
+              opacity: showSidebar ? 1 : 0,
+              pointerEvents: showSidebar ? "auto" : "none",
+            }}
+          >
             <h2 className="text-sm font-bold uppercase tracking-wider mb-4" style={{ color: "var(--foreground-color)" }}>
               Actions Logged
             </h2>

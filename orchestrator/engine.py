@@ -578,7 +578,33 @@ Return your output strictly as a JSON object matching this structure:
             return {"raw_output": content}
 
     def _extract_json(self, text: str) -> dict:
-        """Extract and parse the first JSON object found in a text string, with newline repair."""
+        """Extract and parse the first JSON object found in a text string, with newline and quote repair."""
+        def repair_unescaped_quotes(raw_text: str) -> str:
+            import re
+            lines = raw_text.splitlines()
+            repaired_lines = []
+            for line in lines:
+                # Match pattern: whitespace + "key" + colon + whitespace + " + value + " + optional comma + whitespace
+                match = re.match(r'^(\s*"[a-zA-Z0-9_]+")\s*:\s*"(.*)"(\s*,?\s*)$', line)
+                if match:
+                    prefix, value, suffix = match.groups()
+                    escaped_val = ""
+                    i = 0
+                    while i < len(value):
+                        if value[i] == '"':
+                            # Check if already escaped
+                            if i > 0 and value[i-1] == '\\':
+                                escaped_val += '"'
+                            else:
+                                escaped_val += '\\"'
+                        else:
+                            escaped_val += value[i]
+                        i += 1
+                    repaired_lines.append(f'{prefix}: "{escaped_val}"{suffix}')
+                else:
+                    repaired_lines.append(line)
+            return "\n".join(repaired_lines)
+
         def repair_json_newlines(raw_text: str) -> str:
             chars = list(raw_text)
             in_string = False
@@ -596,6 +622,9 @@ Return your output strictly as a JSON object matching this structure:
                     chars[i] = ''
                 escape = False
             return "".join(chars)
+
+        # Apply quote repair first to prevent invalid JSON strings
+        text = repair_unescaped_quotes(text)
 
         # 1. Try to load the entire text directly (both raw and repaired)
         try:

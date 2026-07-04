@@ -219,6 +219,21 @@ async def delete_campaign(campaign_id: str, user_id: str) -> bool:
 
 async def start_campaign(campaign_id: str, user_id: str) -> Dict:
     """Start an active campaign."""
+    db = await get_database()
+
+    # If no campaign_id provided, find the most recently updated draft or paused campaign
+    if not campaign_id:
+        campaign = await db.campaigns.find_one(
+            {"user_id": user_id, "status": {"$in": ["draft", "paused"]}},
+            sort=[("updated_at", -1)]
+        )
+        if not campaign:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No draft or paused campaign found. Please create a campaign first."
+            )
+        campaign_id = campaign["id"]
+
     campaign = await get_campaign(campaign_id, user_id)
 
     if campaign["status"] == "active":

@@ -547,10 +547,10 @@ def create_app() -> FastAPI:
     from app.api.file_upload_routes import router as file_upload_router
     from app.api.discovery_routes import router as discovery_router
     from app.api.enrichment_routes import router as enrichment_router
-    # DISABLED MODULES (comment out to re-enable):
-    # from app.api.signal_routes import router as signal_router
-    # from app.api.pitch_deck_routes import router as pitch_deck_router
-    # from app.api.inbox_placement_routes import router as inbox_placement_router
+    # Re-enabled routers
+    from app.api.signal_routes import router as signal_router
+    from app.api.pitch_deck_routes import router as pitch_deck_router
+    from app.api.inbox_placement_routes import router as inbox_placement_router
     from app.api.linkedin_routes import router as linkedin_router
     from app.api.task_routes import router as task_router
     from app.api.task_comment_routes import router as task_comment_router
@@ -582,10 +582,10 @@ def create_app() -> FastAPI:
     app.include_router(file_upload_router, prefix=api_prefix, tags=["File Upload"])
     app.include_router(discovery_router, prefix=api_prefix, tags=["Lead Discovery"])
     app.include_router(enrichment_router, prefix=api_prefix, tags=["Contact Enrichment"])
-    # DISABLED: app.include_router(signal_router, prefix=api_prefix, tags=["Signal Intelligence"])
-    # DISABLED: app.include_router(pitch_deck_router, prefix=api_prefix, tags=["Pitch Decks"])
+    app.include_router(signal_router, prefix=api_prefix, tags=["Signal Intelligence"])
+    app.include_router(pitch_deck_router, prefix=api_prefix, tags=["Pitch Decks"])
     app.include_router(linkedin_router, prefix=api_prefix, tags=["LinkedIn"])
-    # DISABLED: app.include_router(inbox_placement_router, prefix=api_prefix, tags=["Inbox Placement"])
+    app.include_router(inbox_placement_router, prefix=api_prefix, tags=["Inbox Placement"])
     app.include_router(task_router, prefix=api_prefix)
     app.include_router(task_comment_router, prefix=api_prefix)
     app.include_router(suggestion_router, prefix=api_prefix)

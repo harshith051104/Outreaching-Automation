@@ -44,18 +44,26 @@ export function useWebSocket({
       wsRef.current = null;
     }
 
-    let wsUrl = `ws://localhost:8000/api/reply-monitor/ws/${userId}`;
+    let wsUrl = `ws://127.0.0.1:8000/api/reply-monitor/ws/${userId}`;
     const publicApiUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (publicApiUrl) {
-      let baseUrl = publicApiUrl;
-      if (baseUrl.endsWith("/")) {
-        baseUrl = baseUrl.slice(0, -1);
+    
+    if (typeof window !== "undefined") {
+      const loc = window.location;
+      // If we are accessed remotely via a public URL (e.g. ngrok), use the current host relative URL
+      if (loc.hostname !== "localhost" && loc.hostname !== "127.0.0.1") {
+        const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
+        wsUrl = `${protocol}//${loc.host}/api/reply-monitor/ws/${userId}`;
+      } else if (publicApiUrl) {
+        let baseUrl = publicApiUrl;
+        if (baseUrl.endsWith("/")) {
+          baseUrl = baseUrl.slice(0, -1);
+        }
+        if (!baseUrl.endsWith("/api") && !baseUrl.includes("/api/")) {
+          baseUrl = `${baseUrl}/api`;
+        }
+        // Convert http:// -> ws:// and https:// -> wss://, replacing localhost with 127.0.0.1
+        wsUrl = `${baseUrl.replace(/^http/, "ws").replace("localhost", "127.0.0.1")}/reply-monitor/ws/${userId}`;
       }
-      if (!baseUrl.endsWith("/api") && !baseUrl.includes("/api/")) {
-        baseUrl = `${baseUrl}/api`;
-      }
-      // Convert http:// -> ws:// and https:// -> wss://
-      wsUrl = `${baseUrl.replace(/^http/, "ws")}/reply-monitor/ws/${userId}`;
     }
 
     try {
