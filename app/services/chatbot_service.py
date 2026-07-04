@@ -1159,91 +1159,216 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
 
         elif name == "generate_reply":
             target_url = args.get("linkedin_url", "").strip()
-            lead = None
-            if target_url:
-                lead = await db.leads.find_one({
-                    "user_id": user_id,
-                    "$or": [{"linkedin": target_url}, {"linkedin_url": target_url}]
-                })
-            else:
-                # Find most recent lead who replied
-                lead = await db.leads.find_one(
+            
+            # 1. Fetch user's campaigns to search replies by campaign_id
+            campaigns = await db.campaigns.find({"user_id": user_id}).to_list(length=100)
+            campaign_ids = [c["id"] for c in campaigns]
+            
+            # Find the most recent email reply
+            email_reply = None
+            if campaign_ids:
+                email_reply = await db.replies.find_one(
+                    {"campaign_id": {"$in": campaign_ids}},
+                    sort=[("received_at", -1)]
+                )
+                
+            # Find the most recent LinkedIn reply lead
+            linkedin_lead = None
+            if not target_url:
+                linkedin_lead = await db.leads.find_one(
                     {"user_id": user_id, "linkedin_reply_received": True},
                     sort=[("updated_at", -1)]
                 )
-
-            if not lead:
+            
+            # Check whether to process email reply or LinkedIn reply
+            process_email = False
+            if email_reply:
+                if target_url == "" and not linkedin_lead:
+                    process_email = True
+                elif linkedin_lead:
+                    # Choose the one with the most recent timestamp
+                    email_ts = email_reply.get("received_at") or email_reply.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
+                    linkedin_ts = linkedin_lead.get("updated_at") or datetime.min.replace(tzinfo=timezone.utc)
+                    if email_ts > linkedin_ts:
+                        process_email = True
+            
+            if process_email and email_reply:
+                # ── Process Email Reply ──
+                lead = await db.leads.find_one({"id": email_reply["lead_id"], "user_id": user_id})
+                if not lead:
+                    lead = await db.leads.find_one({"email": email_reply.get("from_email"), "user_id": user_id})
+                
+                original_email = await db.emails.find_one({"id": email_reply.get("email_id")})
+                
+                lead_name = f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip() if lead else email_reply.get("from_email", "Lead")
+                if not lead_name:
+                    lead_name = "Lead"
+                    
+                lead_context = {
+                    "name": lead_name,
+                    "company": lead.get("company", "") if lead else "",
+                    "role": lead.get("title", "") if lead else "",
+                    "lead_score": lead.get("engagement_score", 50) if lead else 50,
+                    "sender_name": "Founder",
+                }
+                
+                from app.agents.followup_agent import generate_followup
+                original_email_data = {
+                    "subject": original_email.get("subject", "") if original_email else email_reply.get("subject", ""),
+                    "body_text": original_email.get("body_text") or original_email.get("body_html", "") or original_email.get("snippet", "") if original_email else email_reply.get("body", "") or email_reply.get("snippet", ""),
+                }
+                
+                draft = await asyncio.to_thread(
+                    generate_followup,
+                    original_email=original_email_data,
+                    lead_data=lead_context,
+                    sequence_number=1,
+                    engagement_data={
+                        "replied": True,
+                        "reply_snippet": email_reply.get("snippet", ""),
+                        "classification": email_reply.get("classification") or "interested",
+                    },
+                    user_id=user_id,
+                )
+                
+                now = datetime.now(timezone.utc)
+                draft_doc = {
+                    "subject": draft.get("subject", f"Re: {email_reply.get('subject', '')}"),
+                    "body_text": draft.get("body_text", ""),
+                    "body_html": draft.get("body_html", ""),
+                    "generated_at": now,
+                    "status": "pending",
+                    "classification": {"classification": email_reply.get("classification") or "interested"},
+                }
+                
+                await db.replies.update_one(
+                    {"id": email_reply["id"]},
+                    {"$set": {"draft_response": draft_doc}}
+                )
+                
+                from app.utils.id_generator import generate_id
+                action_id = generate_id()
+                approval_doc = {
+                    "action_id": action_id,
+                    "user_id": user_id,
+                    "action_type": "email_reply",
+                    "description": f"Suggested Email Reply to {lead_name} ({email_reply.get('from_email')}):\n\nSubject: {draft_doc['subject']}\n\n{draft_doc['body_text']}",
+                    "count": 1,
+                    "items": [email_reply.get("from_email", "")],
+                    "payload": {
+                        "reply_id": email_reply["id"],
+                        "message": draft_doc["body_text"],
+                        "subject": draft_doc["subject"]
+                    },
+                    "status": "pending",
+                    "chat_session_id": chat_session_id,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                await db.pending_approvals.insert_one(approval_doc)
+                
+                response_markdown = (
+                    f"### Suggested Email Reply for {lead_name}\n"
+                    f"- **From**: {email_reply.get('from_email')}\n"
+                    f"- **Subject**: {draft_doc['subject']}\n\n"
+                    f"I have generated a context-aware email reply below for your approval."
+                )
+                
                 return json.dumps({
-                    "response": "I couldn't find any recent LinkedIn replies to generate a response for.",
-                })
+                    "response": response_markdown,
+                    "pending_approval": {
+                        "action_id": action_id,
+                        "action_type": "email_reply",
+                        "description": f"Suggested Reply:\n\n{draft_doc['body_text']}",
+                        "count": 1,
+                        "items": [email_reply.get("from_email", "")],
+                        "status": "pending"
+                    }
+                }, default=str)
+                
+            else:
+                # ── Process LinkedIn Reply ──
+                lead = None
+                if target_url:
+                    lead = await db.leads.find_one({
+                        "user_id": user_id,
+                        "$or": [{"linkedin": target_url}, {"linkedin_url": target_url}]
+                    })
+                else:
+                    lead = linkedin_lead
 
-            linkedin_url = lead.get("linkedin") or lead.get("linkedin_url", "")
-            lead_name = lead.get("name", "Unknown")
+                if not lead:
+                    return json.dumps({
+                        "response": "I couldn't find any recent LinkedIn or Email replies to generate a response for.",
+                    })
 
-            # Load message history
-            conv = await db.linkedin_conversations.find_one({"user_id": user_id, "contact_linkedin_url": linkedin_url})
-            outbound_actions = await db.linkedin_actions.find({
-                "user_id": user_id,
-                "linkedin_url": linkedin_url,
-                "status": "executed"
-            }).to_list(length=20)
+                linkedin_url = lead.get("linkedin") or lead.get("linkedin_url", "")
+                lead_name = lead.get("name", "Unknown")
 
-            # Generate reply message using LLM
-            message = await _generate_ai_reply_message(user_id, lead, conv, outbound_actions)
+                # Load message history
+                conv = await db.linkedin_conversations.find_one({"user_id": user_id, "contact_linkedin_url": linkedin_url})
+                outbound_actions = await db.linkedin_actions.find({
+                    "user_id": user_id,
+                    "linkedin_url": linkedin_url,
+                    "status": "executed"
+                }).to_list(length=20)
 
-            # Insert pending action
-            from app.utils.id_generator import generate_id
-            action_id = generate_id()
-            action_doc = {
-                "id": action_id,
-                "user_id": user_id,
-                "lead_id": lead["id"],
-                "linkedin_url": linkedin_url,
-                "action_type": "message",
-                "status": "pending_approval",
-                "message": message,
-                "created_at": datetime.now(timezone.utc),
-            }
-            await db.linkedin_actions.insert_one(action_doc)
+                # Generate reply message using LLM
+                message = await _generate_ai_reply_message(user_id, lead, conv, outbound_actions)
 
-            approval_doc = {
-                "action_id": action_id,
-                "user_id": user_id,
-                "action_type": "linkedin_messages",
-                "description": f"Suggested Reply:\n\n{message}",
-                "count": 1,
-                "items": [linkedin_url],
-                "payload": {
-                    "action_id": action_id,
-                    "lead_ids": [lead["id"]],
+                # Insert pending action
+                from app.utils.id_generator import generate_id
+                action_id = generate_id()
+                action_doc = {
+                    "id": action_id,
+                    "user_id": user_id,
+                    "lead_id": lead["id"],
+                    "linkedin_url": linkedin_url,
+                    "action_type": "message",
+                    "status": "pending_approval",
                     "message": message,
-                    "linkedin_url": linkedin_url
-                },
-                "status": "pending",
-                "chat_session_id": chat_session_id,
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
-            }
-            await db.pending_approvals.insert_one(approval_doc)
+                    "created_at": datetime.now(timezone.utc),
+                }
+                await db.linkedin_actions.insert_one(action_doc)
 
-            response_markdown = (
-                f"### Suggested Reply for {lead_name}\n"
-                f"- **Company**: {lead.get('company', '')}\n"
-                f"- **LinkedIn profile**: {linkedin_url}\n\n"
-                f"I have generated a context-aware reply message below for your approval."
-            )
-
-            return json.dumps({
-                "response": response_markdown,
-                "pending_approval": {
+                approval_doc = {
                     "action_id": action_id,
+                    "user_id": user_id,
                     "action_type": "linkedin_messages",
                     "description": f"Suggested Reply:\n\n{message}",
                     "count": 1,
                     "items": [linkedin_url],
-                    "status": "pending"
+                    "payload": {
+                        "action_id": action_id,
+                        "lead_ids": [lead["id"]],
+                        "message": message,
+                        "linkedin_url": linkedin_url
+                    },
+                    "status": "pending",
+                    "chat_session_id": chat_session_id,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
                 }
-            }, default=str)
+                await db.pending_approvals.insert_one(approval_doc)
+
+                response_markdown = (
+                    f"### Suggested Reply for {lead_name}\n"
+                    f"- **Company**: {lead.get('company', '')}\n"
+                    f"- **LinkedIn profile**: {linkedin_url}\n\n"
+                    f"I have generated a context-aware reply message below for your approval."
+                )
+
+                return json.dumps({
+                    "response": response_markdown,
+                    "pending_approval": {
+                        "action_id": action_id,
+                        "action_type": "linkedin_messages",
+                        "description": f"Suggested Reply:\n\n{message}",
+                        "count": 1,
+                        "items": [linkedin_url],
+                        "status": "pending"
+                    }
+                }, default=str)
 
         elif name == "list_linkedin_leads":
             from app.services.linkedin_csv_import_service import get_linkedin_leads_for_outreach

@@ -318,6 +318,12 @@ async def _execute_action(action_doc: dict, user: dict) -> dict:
         lead_ids = payload.get("lead_ids", [])
         return {"executed": len(lead_ids), "campaign_id": campaign_id, "queued": True}
 
+    elif action_type == "email_reply":
+        from app.services.reply_monitor_service import approve_draft
+        reply_id = payload.get("reply_id")
+        res = await approve_draft(reply_id, user["id"])
+        return {"executed": 1, "success": True, "result": res}
+
     elif action_type == "campaign_launch":
         campaign_id = payload.get("campaign_id")
         await db.campaigns.update_one(

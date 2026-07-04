@@ -721,7 +721,7 @@ export default function ChatbotPage() {
                       "Create campaign for healthcare startups",
                       "Generate outreach for Rahul Sharma",
                       "Show highest opportunity leads",
-                      "Generate LinkedIn content"
+                      "Check recent email replies"
                     ].map((cmd) => (
                       <button
                         key={cmd}
