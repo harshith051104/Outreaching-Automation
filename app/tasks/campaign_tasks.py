@@ -160,11 +160,24 @@ def _format_template(text: str, lead: dict, lead_name: str, sender_name: str = "
         "name": lead_name,
         "first_name": first_name,
         "last_name": last_name,
+        "investor_name": lead_name,
+        "investor name": lead_name,
         "company": lead.get("company", ""),
-        "role": lead.get("title", "") or lead.get("role", ""),
-        "title": lead.get("title", "") or lead.get("role", ""),
+        "role": lead.get("title") or lead.get("role") or "",
+        "title": lead.get("title") or lead.get("role") or "",
+        "job_title": lead.get("title") or lead.get("role") or "",
+        "job title": lead.get("title") or lead.get("role") or "",
+        "focus": lead.get("focus", ""),
+        "status": lead.get("status", ""),
+        "score": str(lead.get("score", 0.0)),
+        "quality": str(lead.get("lead_quality_score", 0.0)),
+        "lead_quality_score": str(lead.get("lead_quality_score", 0.0)),
         "website": lead.get("website", ""),
         "email": lead.get("email", ""),
+        "linkedin": lead.get("linkedin", ""),
+        "linkedin_url": lead.get("linkedin", ""),
+        "linkedin url": lead.get("linkedin", ""),
+        "notes": lead.get("notes", ""),
         "sender_name": sender_name,
         "sender_email": sender_email,
         "sender_title": "Founder & CEO",
@@ -175,6 +188,26 @@ def _format_template(text: str, lead: dict, lead_name: str, sender_name: str = "
         val_str = str(value) if value else ""
         result = re.sub(r"\{\{\s*" + key + r"\s*\}\}", val_str, result, flags=re.IGNORECASE)
         result = result.replace("{" + key + "}", val_str)
+
+    # Format custom fields using raw column headings and various normalized forms
+    custom_fields = lead.get("custom_fields") or {}
+    for k, v in custom_fields.items():
+        val_str = str(v) if v else ""
+        key_raw = k.strip()
+        key_underscore = key_raw.lower().replace(" ", "_")
+        key_spaced = key_raw.lower().replace("_", " ")
+        key_flat = key_raw.lower().replace(" ", "").replace("_", "")
+        
+        for placeholder_key in list({key_raw, key_raw.lower(), key_underscore, key_spaced, key_flat}):
+            if not placeholder_key:
+                continue
+            # Double braces replacement (case-insensitive)
+            pattern_double = r"\{\{\s*" + re.escape(placeholder_key) + r"\s*\}\}"
+            result = re.sub(pattern_double, val_str, result, flags=re.IGNORECASE)
+            
+            # Single braces replacement (case-insensitive)
+            pattern_single = r"\{\s*" + re.escape(placeholder_key) + r"\s*\}"
+            result = re.sub(pattern_single, val_str, result, flags=re.IGNORECASE)
 
     # Replace bracketed/curly placeholders like [Your Name] and [Your Email]
     if sender_name:
@@ -286,6 +319,8 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
                 campaign.get("body_template", ""),
                 sender_name,
                 sender_email,
+                "",  # sender_title
+                campaign.get("description", ""),
             )
 
             subject = email_content.get("subject", "")

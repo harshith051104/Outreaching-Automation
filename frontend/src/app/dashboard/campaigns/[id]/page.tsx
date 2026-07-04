@@ -249,14 +249,54 @@ export default function CampaignDetailPage() {
     let result = template;
 
     if (lead) {
-      result = result
-        .replace(/\{\{\s*first_name\s*\}\}/gi, getFirstName(lead))
-        .replace(/\{\{\s*last_name\s*\}\}/gi, getLastName(lead))
-        .replace(/\{\{\s*name\s*\}\}/gi, lead.name || "")
-        .replace(/\{\{\s*email\s*\}\}/gi, lead.email || "")
-        .replace(/\{\{\s*company\s*\}\}/gi, lead.company || "your company")
-        .replace(/\{\{\s*role\s*\}\}/gi, lead.role || "your role")
-        .replace(/\{\{\s*title\s*\}\}/gi, lead.role || "your role");
+      const replacements: Record<string, string> = {
+        name: lead.name || "",
+        first_name: getFirstName(lead),
+        last_name: getLastName(lead),
+        investor_name: lead.name || "",
+        "investor name": lead.name || "",
+        company: lead.company || "your company",
+        role: lead.role || "your role",
+        title: lead.role || "your role",
+        job_title: lead.role || "your role",
+        "job title": lead.role || "your role",
+        focus: lead.focus || "",
+        status: lead.status || "new",
+        score: String(lead.score ?? 0),
+        quality: String(lead.lead_quality_score ?? 0),
+        lead_quality_score: String(lead.lead_quality_score ?? 0),
+        email: lead.email || "",
+        linkedin: (lead as any).linkedin || "",
+        linkedin_url: (lead as any).linkedin || "",
+        "linkedin url": (lead as any).linkedin || "",
+        notes: (lead as any).notes || "",
+      };
+
+      // Merge custom fields
+      const custom_fields = (lead as any).custom_fields || {};
+      Object.keys(custom_fields).forEach((k) => {
+        const key_raw = k.trim();
+        const key_underscore = key_raw.toLowerCase().replace(/ /g, "_");
+        const key_spaced = key_raw.toLowerCase().replace(/_/g, " ");
+        const key_flat = key_raw.toLowerCase().replace(/ /g, "").replace(/_/g, "");
+        
+        const val_str = String(custom_fields[k] ?? "");
+        [key_raw, key_raw.toLowerCase(), key_underscore, key_spaced, key_flat].forEach((placeholderKey) => {
+          replacements[placeholderKey] = val_str;
+        });
+      });
+
+      // Replace placeholders case-insensitively
+      Object.keys(replacements).forEach((key) => {
+        const val_str = replacements[key];
+        const escapedKey = key.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        
+        const doubleRegex = new RegExp(`\\{\\{\\s*${escapedKey}\\s*\\}\\}`, "gi");
+        result = result.replace(doubleRegex, val_str);
+        
+        const singleRegex = new RegExp(`\\{\\s*${escapedKey}\\s*\\}`, "gi");
+        result = result.replace(singleRegex, val_str);
+      });
     }
 
     result = result

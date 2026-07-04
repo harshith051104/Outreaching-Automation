@@ -171,6 +171,27 @@ def extract_lead_fields(row: dict[str, Any]) -> dict[str, Any]:
         if field in row and row[field]:
             lead["notes"] = row[field].strip()
             break
+            
+    # Extract any custom/unrecognized columns from row
+    standard_fields = {
+        "email", "email_address", "email_addresses", "mail", "e-mail",
+        "first_name", "firstname", "given_name",
+        "last_name", "lastname", "family_name",
+        "name", "full_name", "fullname", "contact_name", "person_name",
+        "company", "company_name", "organization", "org", "company_name_1",
+        "role", "job_title", "title", "position", "job_title_1", "headline",
+        "linkedin", "linkedin_url", "linkedin_profile", "linkedin_profile_url", "profile_url", "profile", "url", "linkedin_link",
+        "website", "company_website", "company_url", "site",
+        "focus", "investor_focus", "investorfocus", "investor focus",
+        "notes", "note", "description", "about", "comments",
+    }
+    
+    custom_fields = {}
+    for k, v in row.items():
+        if k not in standard_fields and k and v:
+            custom_fields[k] = v
+            
+    lead["custom_fields"] = custom_fields
     
     return lead
 

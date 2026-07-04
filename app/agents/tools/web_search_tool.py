@@ -57,9 +57,34 @@ class WebSearchTool:
         return research_report
 
     def _fetch_web_data(self, query: str) -> str:
-        """Attempt to fetch basic web data about the query subject."""
-        snippets: list[str] = []
+        """Attempt to fetch basic web data about the query subject using Tavily."""
+        if settings.TAVILY_API_KEY:
+            try:
+                headers = {"Content-Type": "application/json"}
+                payload = {
+                    "api_key": settings.TAVILY_API_KEY,
+                    "query": query,
+                    "max_results": 5,
+                    "include_answer": True,
+                    "include_raw_content": False,
+                }
+                logger.info(f"WebSearchTool: query='{query}' via Tavily")
+                r = httpx.post("https://api.tavily.com/search", json=payload, timeout=20.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    results = data.get("results", [])
+                    snippets = []
+                    for item in results:
+                        snippets.append(f"Source: {item.get('url')}\nContent: {item.get('content')}")
+                    answer = data.get("answer")
+                    if answer:
+                        snippets.append(f"Summary Answer: {answer}")
+                    return "\n\n".join(snippets)
+            except Exception as e:
+                logger.warning(f"WebSearchTool: Tavily search failed: {e}. Falling back to DuckDuckGo.")
 
+        # Fallback to DuckDuckGo if Tavily is unavailable or fails
+        snippets: list[str] = []
         urls_to_try = [
             f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1",
         ]

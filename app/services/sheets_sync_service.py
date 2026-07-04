@@ -257,6 +257,7 @@ async def pull_sheet_updates(user_id: str) -> int:
             "linkedin": row.get("linkedin", ""),
             "notes": row.get("notes", ""),
             "assigned_user": tab_name,
+            "custom_fields": row.get("custom_fields", {}),
             "updated_at": now,
         }
         # Only update checkboxes if TRUE in sheet (never clear a box from sheet side)
@@ -279,6 +280,7 @@ async def pull_sheet_updates(user_id: str) -> int:
                 linkedin=row.get("linkedin", ""),
                 notes=row.get("notes", ""),
                 assigned_user=tab_name,
+                custom_fields=row.get("custom_fields", {}),
                 discovery_source="google_sheet",
             )
             for field in BOOL_FIELDS:
@@ -305,9 +307,14 @@ def _read_sheet_tab(creds: dict, tab_name: str) -> list[dict]:
     if len(all_values) < 2:
         return []
 
+    headers = [h.strip().lower().replace(" ", "_") for h in all_values[0]]
+
     rows = []
     for row in all_values[1:]:
         row_dict: dict[str, Any] = {}
+        custom_fields: dict[str, Any] = {}
+        
+        # 1. Map standard columns by index
         for i, (col_letter, field) in enumerate(SHEET_COLUMNS):
             if i < len(row):
                 cell = row[i].strip()
@@ -317,6 +324,20 @@ def _read_sheet_tab(creds: dict, tab_name: str) -> list[dict]:
                     row_dict[field] = cell
             else:
                 row_dict[field] = False if field in BOOL_FIELDS else ""
+                
+        # 2. Map all other/custom columns by header name
+        for i in range(len(row)):
+            if i < len(headers):
+                header = headers[i]
+                is_standard = False
+                for col_letter, field in SHEET_COLUMNS:
+                    if field == header:
+                        is_standard = True
+                        break
+                if not is_standard and header:
+                    custom_fields[header] = row[i].strip()
+                    
+        row_dict["custom_fields"] = custom_fields
         if row_dict.get("email") or row_dict.get("name"):
             rows.append(row_dict)
     return rows

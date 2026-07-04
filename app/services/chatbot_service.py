@@ -1230,11 +1230,14 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                 lead_context = {
                     "name": lead_name,
                     "company": lead.get("company", "") if lead else "",
-                    "role": lead.get("title", "") if lead else "",
-                    "lead_score": lead.get("engagement_score", 50) if lead else 50,
+                    "role": lead.get("title") or lead.get("role") or "" if lead else "",
+                    "focus": lead.get("focus", "") if lead else "",
+                    "lead_score": lead.get("score", 50) if lead else 50,
                     "sender_name": "Founder",
+                    "custom_fields": lead.get("custom_fields", {}) if lead else {},
                 }
                 
+                import asyncio
                 from app.agents.followup_agent import generate_followup
                 original_email_data = {
                     "subject": original_email.get("subject", "") if original_email else email_reply.get("subject", ""),
@@ -1254,11 +1257,16 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     user_id=user_id,
                 )
                 
+                draft_body = draft.get("body_text") or draft.get("body") or draft.get("message") or ""
+                draft_html = draft.get("body_html") or draft.get("body") or draft.get("message") or ""
+                if draft_html and not (draft_html.strip().startswith("<") and draft_html.strip().endswith(">")):
+                    draft_html = f"<p>{draft_html.replace(chr(10), '<br>')}</p>"
+
                 now = datetime.now(timezone.utc)
                 draft_doc = {
                     "subject": draft.get("subject", f"Re: {email_reply.get('subject', '')}"),
-                    "body_text": draft.get("body_text", ""),
-                    "body_html": draft.get("body_html", ""),
+                    "body_text": draft_body.strip(),
+                    "body_html": draft_html.strip(),
                     "generated_at": now,
                     "status": "pending",
                     "classification": {"classification": email_reply.get("classification") or "interested"},

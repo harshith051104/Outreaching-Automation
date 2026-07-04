@@ -47,6 +47,7 @@ def write_outreach_email(
     sender_name: str = "",
     sender_email: str = "",
     sender_title: str = "",
+    campaign_description: str = "",
 ) -> dict[str, Any]:
     """
     Run the email writing pipeline for a lead framework-freely.
@@ -60,6 +61,7 @@ def write_outreach_email(
         sender_name: Name of the sender.
         sender_email: Email address of the sender.
         sender_title: Job title of the sender.
+        campaign_description: Contextual description of the sender's company/product.
 
     Returns:
         Email data as a dictionary with subject, body_html, body_text, cta.
@@ -95,6 +97,9 @@ filters, and drive a single clear action.
 - Role: {role}
 - Company: {company}
 
+**Sender's Company Context / Campaign Goal:**
+{campaign_description or "N/A"}
+
 **Personalization Data:**
 {personalization_json}
 
@@ -126,6 +131,7 @@ filters, and drive a single clear action.
    - No links in the first email (improves deliverability)
    - No attachments mentioned
    - Write in short paragraphs (1-2 sentences each)
+   - Resolve and replace any bracketed text or instructions (such as `[insert 1-sentence update: ...]`, `[Specific Thesis Point]`, or `[1-sentence generic value prop...]`) inside the templates. Do NOT output any bracketed text in the final email. Replace them with highly specific, factual, and contextually appropriate sentences based on the lead's profile, personalization data, and the sender's company context.
    - Make sure all placeholders like [Your Name] or [Your Email] are replaced with actual names or resolved naturally.
 
 3. **Formatting:**

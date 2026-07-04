@@ -38,6 +38,7 @@ class Lead(BaseModel):
     research_data: dict[str, Any] = Field(default_factory=dict)
     personalization_data: dict[str, Any] = Field(default_factory=dict)
     enrichment_data: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     # ── Outreach Tracking Fields ───────────────────────────────────────────
     # Team assignment & investor metadata

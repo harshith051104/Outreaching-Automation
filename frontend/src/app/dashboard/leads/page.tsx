@@ -169,6 +169,20 @@ export default function LeadsPage() {
     return { color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.25)' };
   };
 
+  const customFieldKeys = Array.from(
+    new Set(
+      filteredLeads.flatMap(lead => 
+        lead.custom_fields ? Object.keys(lead.custom_fields) : []
+      )
+    )
+  );
+
+  const formatHeader = (key: string) => {
+    return key
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, c => c.toUpperCase());
+  };
+
   return (
     <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
       {/* Header */}
@@ -250,9 +264,9 @@ export default function LeadsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--card-border)' }}>
-                  {['Name', 'Email', 'Company', 'Job Title', 'Focus', 'Status', 'Score', 'Quality', 'Actions'].map((h, i) => (
+                  {['Name', 'Email', 'Company', 'Job Title', 'Focus', 'Status', 'Score', 'Quality'].map((h) => (
                     <th key={h} style={{
-                      padding: '12px 16px', textAlign: i === 8 ? 'right' : 'left',
+                      padding: '12px 16px', textAlign: 'left',
                       fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
                       textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
                       whiteSpace: 'nowrap',
@@ -260,6 +274,24 @@ export default function LeadsPage() {
                       {h}
                     </th>
                   ))}
+                  {customFieldKeys.map((k) => (
+                    <th key={k} style={{
+                      padding: '12px 16px', textAlign: 'left',
+                      fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
+                      textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {formatHeader(k)}
+                    </th>
+                  ))}
+                  <th style={{
+                    padding: '12px 16px', textAlign: 'right',
+                    fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
+                    textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -332,6 +364,14 @@ export default function LeadsPage() {
                           </span>
                         ) : <span style={{ color: 'var(--sidebar-text-muted)', fontSize: '13px' }}>—</span>}
                       </td>
+                      {customFieldKeys.map((key) => {
+                        const val = lead.custom_fields ? lead.custom_fields[key] : undefined;
+                        return (
+                          <td key={key} style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
+                            {val !== undefined && val !== "" ? String(val) : '—'}
+                          </td>
+                        );
+                      })}
                       <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', textAlign: 'right' }}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
                           <button onClick={() => openLeadIntel(lead)} style={{

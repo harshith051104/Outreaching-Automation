@@ -57,25 +57,39 @@ def generate_followup(
 
     engagement_json = json.dumps(engagement_data, indent=2, default=str)
 
-    approach = SEQUENCE_VARIATIONS.get(
-        sequence_number,
-        SEQUENCE_VARIATIONS.get(4, "breakup — respectful final outreach"),
-    )
+    is_reply = bool(reply_snippet or (engagement_data and engagement_data.get("replied", False)))
 
-    logger.info(f"Generating framework-free follow-up #{sequence_number} for: {lead_name} signed by: {sender_name}")
+    if is_reply:
+        approach = "Direct reply: Analyze the lead's previous reply snippet and draft a highly personalized, contextual response addressing their questions, greeting, or interest."
+        system_prompt = (
+            "You are a Conversational Response AI and sales executive. Your job is to draft a highly professional, "
+            "context-aware, and natural email response to a lead who has replied to your initial email. "
+            "Address whatever the lead wrote in their reply snippet, build rapport, answer their questions, and "
+            "propose a meeting if appropriate."
+        )
+        task_description = f"Generate a direct response to {lead_name}'s recent email message. Address their input directly."
+        sequence_info = "Status: Direct Response to Prospect Reply"
+    else:
+        approach = SEQUENCE_VARIATIONS.get(
+            sequence_number,
+            SEQUENCE_VARIATIONS.get(4, "breakup — respectful final outreach"),
+        )
+        system_prompt = (
+            "You are a Follow-up Strategist sales expert. You are a persistence expert in sales follow-ups with a proven "
+            "track record of turning cold leads warm through thoughtful, well-timed follow-up sequences. You understand "
+            "that 80% of deals require 5+ touchpoints, and that the key to effective follow-ups is adding NEW value with each touch — "
+            "never just 'bumping this to the top of your inbox.' You're a master at reading engagement signals and crafting "
+            "follow-ups that address the likely reason for silence."
+        )
+        task_description = f"Generate follow-up email #{sequence_number} for {lead_name} ({role} at {company}) sent by {sender_name}."
+        sequence_info = f"Sequence Position: Follow-up #{sequence_number}"
 
-    system_prompt = (
-        "You are a Follow-up Strategist sales expert. You are a persistence expert in sales follow-ups with a proven "
-        "track record of turning cold leads warm through thoughtful, well-timed follow-up sequences. You understand "
-        "that 80% of deals require 5+ touchpoints, and that the key to effective follow-ups is adding NEW value with each touch — "
-        "never just 'bumping this to the top of your inbox.' You're a master at reading engagement signals and crafting "
-        "follow-ups that address the likely reason for silence."
-    )
+    logger.info(f"Generating email response for: {lead_name} (IsReply={is_reply}) signed by: {sender_name}")
 
     reply_context = ""
     if reply_snippet:
         reply_context = f"""
-**Lead's Previous Reply:**
+**Lead's Recent Reply (MUST DRAFT RESPONSE DIRECTLY TO THIS):**
 ---
 {reply_snippet}
 ---
@@ -84,17 +98,17 @@ def generate_followup(
 """
 
     user_prompt = f"""
-You are a Follow-up Strategist. Generate follow-up email #{sequence_number} for {lead_name} ({role} at {company}) sent by {sender_name}.
+You are a Sales AI. {task_description}
 
 **CRITICAL INSTRUCTION: You MUST analyze the content below and use SPECIFIC details from it in your email. Do NOT generate generic templates.**
 
 {reply_context}
-**Original Email (MUST ANALYZE AND REFERENCE):**
+**Original Email:**
 Subject: {original_subject}
 Body:
 {original_body}
 
-**Lead Profile (MUST USE AT LEAST ONE SPECIFIC DETAIL):**
+**Lead Profile:**
 - Name: {lead_name}
 - Role: {role}
 - Company: {company}
@@ -105,7 +119,7 @@ Body:
 **Engagement Signals:**
 {engagement_json}
 
-**Sequence Position:** Follow-up #{sequence_number}
+{sequence_info}
 **Recommended Approach:** {approach}
 
 **Follow-up Strategy Guidelines:**
@@ -139,12 +153,14 @@ Body:
    - No spam triggers
    - Both HTML and plain-text versions
    - SIGN OFF using the sender's name '{sender_name}'
+   - Resolve and replace any bracketed text or instructions (such as `[insert 1-sentence update: ...]`, `[Specific Thesis Point]`, or `[1-sentence generic value prop...]`) inside the templates. Do NOT output any bracketed text in the final email. Replace them with highly specific, factual, and contextually appropriate sentences based on the lead's profile, engagement data, and context.
 
 **FORBIDDEN — Your email will be rejected if it contains:**
 - Generic phrases like "I hope this email finds you well"
 - Generic placeholders like '[Your Name]' or '[Your Email]'
 - Content that could work for any prospect (must be specific to THIS lead)
 - "Just checking in" without adding new value
+- Any mention of internal classification terms (like 'spam', 'not interested', 'interested', 'neutral', 'flagged', 'classification', 'lead score', or 'automation'). Always write natural, friendly responses as a human founder.
 
 Return your output strictly as a JSON object matching this structure:
 {{
@@ -166,6 +182,16 @@ Return your output strictly as a JSON object matching this structure:
         ]
         raw_output = groq_inference(messages, temperature=0.5, user_id=user_id)
         parsed = _extract_json(raw_output)
+        
+        # Normalize body keys in case LLM output deviates from instructions
+        body_text = parsed.get("body_text") or parsed.get("body") or parsed.get("message") or ""
+        body_html = parsed.get("body_html") or parsed.get("body") or parsed.get("message") or ""
+        if body_html and not (body_html.strip().startswith("<") and body_html.strip().endswith(">")):
+            body_html = f"<p>{body_html.replace(chr(10), '<br>')}</p>"
+            
+        parsed["body_text"] = body_text.strip()
+        parsed["body_html"] = body_html.strip()
+        
         logger.info("Follow-up generation completed framework-freely — JSON parsed successfully.")
         return parsed
     except Exception as exc:

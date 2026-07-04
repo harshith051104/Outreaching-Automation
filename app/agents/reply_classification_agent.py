@@ -81,7 +81,7 @@ and the recommended next action.
 4. **follow_up_later** — The lead indicates timing is wrong but doesn't reject outright.
    Examples: "Not right now", "Reach out next quarter", "We're in a freeze"
 
-5. **spam** — Auto-reply, out-of-office, bounce notification, or irrelevant content.
+5. **spam** — Auto-reply, out-of-office, bounce notification, or system mailer messages. Note: Do NOT classify friendly personal greetings, casual conversations, or short queries (such as "How are you?", "Who is this?", or "Thanks") as spam. Classify those as interested/neutral.
    Examples: "I'm OOO until...", "This mailbox is not monitored", auto-generated replies
 
 **Analysis Requirements:**
