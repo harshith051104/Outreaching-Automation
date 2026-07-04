@@ -1164,9 +1164,26 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             campaigns = await db.campaigns.find({"user_id": user_id}).to_list(length=100)
             campaign_ids = [c["id"] for c in campaigns]
             
+            # Try to find a lead if target_url is provided and is not a URL
+            lead_by_target = None
+            if target_url and not target_url.startswith("http") and "linkedin.com" not in target_url:
+                lead_by_target = await db.leads.find_one({
+                    "user_id": user_id,
+                    "$or": [
+                        {"email": target_url.lower()},
+                        {"id": target_url},
+                        {"name": {"$regex": f"^{re.escape(target_url)}$", "$options": "i"}}
+                    ]
+                })
+            
             # Find the most recent email reply
             email_reply = None
-            if campaign_ids:
+            if lead_by_target:
+                email_reply = await db.replies.find_one(
+                    {"lead_id": lead_by_target["id"]},
+                    sort=[("received_at", -1)]
+                )
+            elif campaign_ids:
                 email_reply = await db.replies.find_one(
                     {"campaign_id": {"$in": campaign_ids}},
                     sort=[("received_at", -1)]
@@ -1174,7 +1191,9 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                 
             # Find the most recent LinkedIn reply lead
             linkedin_lead = None
-            if not target_url:
+            if lead_by_target and (lead_by_target.get("linkedin") or lead_by_target.get("linkedin_url")):
+                linkedin_lead = lead_by_target
+            elif not target_url:
                 linkedin_lead = await db.leads.find_one(
                     {"user_id": user_id, "linkedin_reply_received": True},
                     sort=[("updated_at", -1)]
@@ -1183,7 +1202,7 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
             # Check whether to process email reply or LinkedIn reply
             process_email = False
             if email_reply:
-                if target_url == "" and not linkedin_lead:
+                if (not target_url or target_url.lower() in ("that", "mail", "email")) and not linkedin_lead:
                     process_email = True
                 elif linkedin_lead:
                     # Choose the one with the most recent timestamp
@@ -1191,6 +1210,9 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     linkedin_ts = linkedin_lead.get("updated_at") or datetime.min.replace(tzinfo=timezone.utc)
                     if email_ts > linkedin_ts:
                         process_email = True
+                elif not linkedin_lead:
+                    # If target_url matched email_reply (e.g. search by email or name), process email
+                    process_email = True
             
             if process_email and email_reply:
                 # ── Process Email Reply ──
@@ -2612,14 +2634,22 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
     )
     if gen_reply_match or re.search(r"\bgenerate\s+(?:a\s+)?(?:reply|response)\b", msg_lower) or re.search(r"\bdraft\s+(?:a\s+)?(?:reply|response)\b", msg_lower):
         target_url = gen_reply_match.group(1).strip() if gen_reply_match else ""
+        
+        # Strip generic pronouns or keywords from being treated as a specific lead identifier
+        if target_url.lower() in ("that", "this", "it", "the", "mail", "email", "him", "her", "me", "them"):
+            target_url = ""
+            
         if target_url and not target_url.startswith("http") and "linkedin.com" not in target_url:
-            # If target_url is a name rather than a URL, let's search for a lead with that name
+            # Check if it is a name or email address
             lead = await db.leads.find_one({
                 "user_id": user_id,
-                "name": {"$regex": f"^{re.escape(target_url)}$", "$options": "i"}
+                "$or": [
+                    {"email": target_url.lower()},
+                    {"name": {"$regex": f"^{re.escape(target_url)}$", "$options": "i"}}
+                ]
             })
             if lead:
-                target_url = lead.get("linkedin") or lead.get("linkedin_url", "")
+                target_url = lead.get("linkedin") or lead.get("linkedin_url", "") or lead.get("email", "")
         
         args = {}
         if target_url:
