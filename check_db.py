@@ -1,28 +1,21 @@
 import asyncio
-from pymongo import MongoClient
+from app.config.mongodb_config import get_database
 
-MONGODB_URL = "mongodb+srv://sriharshith0511:kanna051104@intersnhip.9qedzpx.mongodb.net/?appName=intersnhip&tlsAllowInvalidCertificates=true"
-DB_NAME = "outreach_ai"
-
-def check():
-    client = MongoClient(MONGODB_URL)
-    db = client[DB_NAME]
+async def main():
+    db = await get_database()
+    campaigns = await db.campaigns.find().to_list(length=10)
+    print("Campaigns:")
+    for c in campaigns:
+        lead_count = await db.leads.count_documents({"campaign_id": c["id"]})
+        print(f"- {c.get('name')} ({c.get('id')}): {lead_count} leads")
+        
+    print("\nTotal leads count in DB:", await db.leads.count_documents({}))
     
-    print("=== USERS ===")
-    for u in db.users.find({}, {"_id": 0, "id": 1, "name": 1, "email": 1}):
-        print(u)
-        
-    print("\n=== CAMPAIGNS ===")
-    for c in db.campaigns.find({}, {"_id": 0, "id": 1, "name": 1, "user_id": 1}):
-        print(c)
-        
-    print("\n=== REPLIES ===")
-    for r in db.replies.find({}, {"_id": 0, "id": 1, "campaign_id": 1, "from_email": 1, "subject": 1, "received_at": 1}):
-        print(r)
-        
-    print("\n=== LEADS WHO REPLIED ===")
-    for l in db.leads.find({"status": "replied"}, {"_id": 0, "id": 1, "name": 1, "email": 1, "status": 1}):
-        print(l)
+    # Print the last 5 leads
+    leads = await db.leads.find().sort("created_at", -1).limit(5).to_list(length=5)
+    print("\nLast 5 leads:")
+    for l in leads:
+        print(f"- {l.get('name')} ({l.get('email')}): campaign_id={l.get('campaign_id')}")
 
 if __name__ == "__main__":
-    check()
+    asyncio.run(main())
