@@ -5,6 +5,7 @@ import api from "@/services/api";
 
 export interface ApprovalAction {
   action_id: string;
+  chat_session_id?: string;
   action_type: "linkedin_connections" | "email_send" | "campaign_launch" | "followup_send" | string;
   description: string;
   count?: number;
