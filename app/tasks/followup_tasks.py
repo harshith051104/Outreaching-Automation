@@ -74,6 +74,17 @@ async def execute_followup(followup_id: str) -> dict:
     if followup["status"] != "pending":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Follow-up is already {followup['status']}.")
 
+    campaign = await db.campaigns.find_one({"id": followup["campaign_id"]})
+    if not campaign:
+        await _mark_followup(followup_id, "failed")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
+
+    if campaign.get("status") != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Campaign '{campaign.get('name', 'unknown')}' is not active (status: {campaign.get('status')}). Skipping follow-up execution."
+        )
+
     original_email = await db.emails.find_one({"id": followup["email_id"]})
     if not original_email:
         await _mark_followup(followup_id, "failed")
