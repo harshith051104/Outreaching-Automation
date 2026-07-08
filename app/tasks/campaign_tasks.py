@@ -149,7 +149,7 @@ async def _execute_campaign_async(campaign_id: str) -> dict:
 
 
 def _format_template(text: str, lead: dict, lead_name: str, sender_name: str = "", sender_email: str = "") -> str:
-    """Replace template placeholders."""
+    """Replace template placeholders. Returns unresolved placeholders for AI generation."""
     if not text:
         return ""
 
@@ -168,6 +168,7 @@ def _format_template(text: str, lead: dict, lead_name: str, sender_name: str = "
         "job_title": lead.get("title") or lead.get("role") or "",
         "job title": lead.get("title") or lead.get("role") or "",
         "focus": lead.get("focus", ""),
+        "investor_focus": lead.get("focus", ""),
         "status": lead.get("status", ""),
         "score": str(lead.get("score", 0.0)),
         "quality": str(lead.get("lead_quality_score", 0.0)),
@@ -221,7 +222,237 @@ def _format_template(text: str, lead: dict, lead_name: str, sender_name: str = "
     result = re.sub(r"\[Sender\s+Title\]", "Founder & CEO", result, flags=re.IGNORECASE)
     result = re.sub(r"\{\{\s*sender_title\s*\}\}", "Founder & CEO", result, flags=re.IGNORECASE)
 
+    # Bracket-style investor placeholders
+    investor_name_bracket = lead.get("name", lead_name)
+    if investor_name_bracket:
+        result = re.sub(r"\[Investor\s+Name\]", investor_name_bracket, result, flags=re.IGNORECASE)
+        result = re.sub(r"\[Investors?\s+Name\]", investor_name_bracket, result, flags=re.IGNORECASE)
+
+    # Focus placeholders
+    focus_val = lead.get("focus", "") or ""
+    if focus_val:
+        focus_items = [f.strip() for f in focus_val.split(",") if f.strip()]
+        if len(focus_items) <= 2:
+            # 1-2 focus areas: use as-is
+            combined_focus = ", ".join(focus_items)
+            result = re.sub(r"\[Investor\s+Focus\s+Area\]", combined_focus, result, flags=re.IGNORECASE)
+            result = re.sub(r"\[Investor\s+Focus\s+1\]", focus_items[0], result, flags=re.IGNORECASE)
+            if len(focus_items) > 1:
+                result = re.sub(r"\[Investor\s+Focus\s+2\]", focus_items[1], result, flags=re.IGNORECASE)
+        # 3+ focus areas: leave [Investor Focus Area] for AI to select most relevant
+
+    # Firm name placeholders
+    company_val = lead.get("company", "") or ""
+    if company_val:
+        result = re.sub(r"\[Firm\s+Name\]", company_val, result, flags=re.IGNORECASE)
+
     return result
+
+
+def _extract_unresolved_placeholders(text: str) -> list:
+    """Extract remaining {{placeholder}} and [placeholder] patterns from text."""
+    double = re.findall(r"\{\{([^}]+)\}\}", text)
+    bracket = re.findall(r"\[([^\]]+)\]", text)
+    return double + bracket
+
+
+async def _load_cached_placeholders(campaign_id: str, lead_id: str) -> dict:
+    """Load cached AI-generated placeholder values for a lead+campaign."""
+    from app.config.mongodb_config import get_database
+    db = await get_database()
+    cache_key = f"{campaign_id}:{lead_id}"
+    doc = await db.ai_placeholder_cache.find_one({"cache_key": cache_key})
+    if doc:
+        return doc.get("values", {})
+    return {}
+
+
+async def _save_cached_placeholders(campaign_id: str, lead_id: str, values: dict) -> None:
+    """Save AI-generated placeholder values to cache."""
+    from app.config.mongodb_config import get_database
+    from datetime import datetime, timezone
+    db = await get_database()
+    cache_key = f"{campaign_id}:{lead_id}"
+    await db.ai_placeholder_cache.update_one(
+        {"cache_key": cache_key},
+        {"$set": {"values": values, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+
+
+async def _clear_cached_placeholders(campaign_id: str, lead_id: str) -> None:
+    """Clear cached AI placeholder values for a lead+campaign (for regeneration)."""
+    from app.config.mongodb_config import get_database
+    db = await get_database()
+    cache_key = f"{campaign_id}:{lead_id}"
+    await db.ai_placeholder_cache.delete_one({"cache_key": cache_key})
+
+
+async def _ai_generate_placeholders(
+    text: str,
+    lead: dict,
+    campaign: dict,
+    lead_name: str,
+    sender_name: str = "",
+) -> str:
+    """Use LLM to generate values for unresolved placeholders in text.
+    Uses per-lead+campaign cache to avoid regenerating the same values."""
+    unresolved = _extract_unresolved_placeholders(text)
+    if not unresolved:
+        return text
+
+    # Filter out already-known bracket values like [Investor Name] that are just literal text
+    unresolved = [p for p in unresolved if not p.startswith("Investor Name") and len(p) > 2]
+
+    if not unresolved:
+        return text
+
+    # Load cached values
+    campaign_id = campaign.get("id", "")
+    lead_id = lead.get("id", "")
+    cached = await _load_cached_placeholders(campaign_id, lead_id) if campaign_id and lead_id else {}
+
+    # Apply cached values first
+    for ph in unresolved:
+        if ph in cached:
+            val_str = cached[ph]
+            text = re.sub(r"\{\{\s*" + re.escape(ph) + r"\s*\}\}", val_str, text, flags=re.IGNORECASE)
+            text = re.sub(r"\[\s*" + re.escape(ph) + r"\s*\]", val_str, text, flags=re.IGNORECASE)
+
+    # Resolve known placeholders from lead data before sending to LLM
+    focus_val = lead.get("focus", "") or ""
+    focus_items = [f.strip() for f in focus_val.split(",") if f.strip()] if focus_val else []
+    focus_combined = ", ".join(focus_items[:3]) if focus_items else ""  # max 3 items
+
+    # Extract firm description from custom_fields (CSV import stores it there)
+    firm_description = lead.get("custom_fields", {}).get("firm_description", "") or ""
+
+    lead_data_replacements = {
+        "Investor Focus 1": focus_items[0] if focus_items else "",
+        "Investor Focus 2": focus_items[1] if len(focus_items) > 1 else "",
+        "Firm Name": lead.get("company", ""),
+        "Investor Name": lead.get("name", ""),
+        "Firm Description": firm_description,
+    }
+
+    # Investor Focus Area: resolve from lead ONLY if 1-2 focus items (not enough choice for AI)
+    # If 3+ items OR no focus data → leave unresolved so LLM handles it
+    if 0 < len(focus_items) <= 2:
+        lead_data_replacements["Investor Focus Area"] = focus_combined
+
+    for ph_name, replacement in lead_data_replacements.items():
+        if replacement:
+            text = re.sub(r"\[\s*" + re.escape(ph_name) + r"\s*\]", replacement, text, flags=re.IGNORECASE)
+            text = re.sub(r"\{\{\s*" + re.escape(ph_name) + r"\s*\}\}", replacement, text, flags=re.IGNORECASE)
+
+    # Re-check unresolved after applying lead data
+    unresolved = _extract_unresolved_placeholders(text)
+    unresolved = [p for p in unresolved if not p.startswith("Investor Name") and len(p) > 2]
+
+    if not unresolved:
+        return text
+
+    # Only send uncached placeholders to LLM
+    placeholder_defs = campaign.get("ai_placeholder_definitions", {})
+
+    from app.services.llm_manager import LLMManager
+
+    focus = lead.get("focus", lead.get("custom_fields", {}).get("Focus", ""))
+    company = lead.get("company", lead.get("custom_fields", {}).get("Company", ""))
+    firm_description = lead.get("custom_fields", {}).get("firm_description", "")
+
+    # Parse all focus areas
+    focus_items = [f.strip() for f in focus.split(",") if f.strip()] if focus else []
+    focus_all = ", ".join(focus_items) if focus_items else "Not specified"
+    # Pick primary focus (first item) for simple references
+    focus_primary = focus_items[0] if focus_items else "Not specified"
+
+    # Research ElectraWireless for accurate content
+    electra_research = ""
+    try:
+        from app.services.tavily_service import TavilyService
+        tavily = TavilyService()
+        research_results = await tavily.search("ElectraWireless wireless power startup", max_results=3, user_id=lead.get("user_id"))
+        if research_results:
+            electra_research = "\n".join([r.get("content", "") for r in research_results[:3]])
+    except Exception as e:
+        logger.warning("Tavily research failed for ElectraWireless: %s", e)
+
+    prompt_parts = []
+    for ph in unresolved:
+        ph_key = ph.strip().lower().replace(" ", "_").replace("-", "_")
+        definition = placeholder_defs.get(ph_key) or placeholder_defs.get(ph, "")
+        if definition:
+            prompt_parts.append(f"- [{ph}]: {definition}")
+        else:
+            prompt_parts.append(f"- [{ph}]: Generate a contextually appropriate value. This is a placeholder in a cold investor outreach email for ElectraWireless (wireless power infrastructure startup, $5M seed round).")
+
+    research_section = f"\n\nRESEARCH DATA (use this for accurate ElectraWireless details):\n{electra_research}" if electra_research else ""
+
+    focus_instruction = ""
+    if len(focus_items) > 2:
+        focus_instruction = f"""
+INVESTOR FOCUS AREAS (select the 1-2 MOST relevant to ElectraWireless wireless power infrastructure):
+{focus_all}
+
+When generating values for placeholders like [Investor Focus Area] or [Specific Thesis Point]:
+- Pick the 1-2 focus areas that best align with wireless power, energy infrastructure, hardware, IoT, smart devices, or related tech
+- If none clearly align, pick the closest or most adjacent focus area
+- Always connect the selected focus to how ElectraWireless's technology addresses that space"""
+
+    system_msg = f"""You are an AI assistant generating personalized email content for investor outreach.
+
+LEAD CONTEXT:
+- Name: {lead_name}
+- Company/Firm: {company}
+- Firm Description: {firm_description or "Not available"}
+- Primary Investment Focus: {focus_primary}
+- All Investment Focus Areas: {focus_all}
+- Email: {lead.get('email', '')}
+
+CAMPAIGN CONTEXT:
+- Product: ElectraWireless - wireless power infrastructure (5W-30kW)
+- Strategy: Phased rollout (Smart Kitchens -> Industrial -> EV)
+- AI Control Layer: Elly (SaaS revenue)
+- Raise: $5M seed round{research_section}{focus_instruction}
+
+Generate ONLY the placeholder values as JSON. Keys are the EXACT placeholder text (without brackets or braces), values are the generated text.
+Keep each value concise (1-2 sentences max). Be specific and credible.
+Use the RESEARCH DATA when available to ensure accuracy about ElectraWireless.
+Return valid JSON dict like: {{"Investor Focus 1": "generated value", "Specific Thesis Point": "generated value"}}
+
+PLACEHOLDERS TO GENERATE:
+{chr(10).join(prompt_parts)}"""
+
+    try:
+        result = await LLMManager.generate_completion(
+            task_type="email_personalization",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": "Generate the placeholder values."},
+            ],
+            user_id=lead.get("user_id", "system"),
+            temperature=0.7,
+        )
+
+        content = result.get("content", "{}")
+        import json
+        # Try to extract JSON from response
+        json_match = re.search(r"\{[^}]+\}", content, re.DOTALL)
+        if json_match:
+            generated = json.loads(json_match.group())
+            # Save to cache for reuse
+            if campaign_id and lead_id and generated:
+                await _save_cached_placeholders(campaign_id, lead_id, generated)
+            for ph, value in generated.items():
+                val_str = str(value) if value else ""
+                # Replace both {{placeholder}} and [placeholder] forms
+                text = re.sub(r"\{\{\s*" + re.escape(ph) + r"\s*\}\}", val_str, text, flags=re.IGNORECASE)
+                text = re.sub(r"\[\s*" + re.escape(ph) + r"\s*\]", val_str, text, flags=re.IGNORECASE)
+    except Exception as exc:
+        logger.error("AI placeholder generation failed: %s", exc)
+
+    return text
 
 
 def convert_text_to_html(text: str) -> str:
@@ -336,6 +567,10 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
         subject = _format_template(subject_tpl, lead, lead_name, sender_name, sender_email)
         body_html = _format_template(body_tpl, lead, lead_name, sender_name, sender_email)
 
+        # AI-generate any remaining unresolved placeholders
+        subject = await _ai_generate_placeholders(subject, lead, campaign, lead_name, sender_name)
+        body_html = await _ai_generate_placeholders(body_html, lead, campaign, lead_name, sender_name)
+
     if not subject or not body_html:
         return "skipped"
 
@@ -343,6 +578,10 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
     body_html = convert_text_to_html(body_html)
 
     tracking_id = generate_tracking_id()
+
+    # Run AI review guardrails before sending
+    from app.services.guardrail_service import run_guardrail_review
+    guardrail_report = await run_guardrail_review(subject, body_html, user_id)
 
     email_data = EmailCreate(
         campaign_id=campaign["id"],
@@ -352,10 +591,29 @@ async def _process_lead(campaign: dict, lead: dict) -> str:
         subject=subject,
         body_html=body_html,
         sequence_number=1,
+        guardrail=guardrail_report,
     )
 
     email_doc = await create_email(user_id, email_data, tracking_id)
+
+    if not guardrail_report.get("passed", True):
+        logger.warning(f"Email task for lead {lead['id']} blocked by AI Guardrails (Score: {guardrail_report.get('score')})")
+        await db.emails.update_one(
+            {"id": email_doc["id"]},
+            {"$set": {"status": "failed_guardrail", "updated_at": datetime.now(timezone.utc)}}
+        )
+        from app.services.outreach_tracker_service import log_timeline_event
+        await log_timeline_event(
+            lead_id=lead["id"],
+            user_id=user_id,
+            event_type="note_added",
+            description=f"AI email blocked by Guardrails (Score: {guardrail_report.get('score')}/100). Comments: {guardrail_report.get('comments')}",
+            campaign_id=campaign["id"]
+        )
+        return "failed"
+
     await send_campaign_email(email_doc["id"])
+    logger.info("Email sent to %s for lead %s", lead_email, lead_name)
 
     await db.leads.update_one(
         {"id": lead["id"]},

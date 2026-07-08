@@ -138,3 +138,19 @@ async def mark_all_read(
         "status": "success",
         "message": f"All notifications marked as read. Modified {result.modified_count} items."
     }
+
+
+@router.delete(
+    "",
+    response_model=dict,
+    summary="Delete all notifications for current user",
+)
+async def delete_all(
+    current_user: dict = Depends(get_current_user),
+):
+    db = await get_database()
+    result = await db.notifications.delete_many({"user_id": current_user["id"]})
+    return {
+        "status": "success",
+        "message": f"Deleted {result.deleted_count} notifications."
+    }

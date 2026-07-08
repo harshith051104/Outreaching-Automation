@@ -146,10 +146,16 @@ def _extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if json_match:
-        return json.loads(json_match.group(1))
+    # Try to find JSON inside ``` code blocks (with or without json tag)
+    code_block_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+    if code_block_match:
+        block = code_block_match.group(1).strip()
+        try:
+            return json.loads(block)
+        except json.JSONDecodeError:
+            pass
 
+    # Fallback: find first { and match braces to find the complete JSON object
     brace_start = text.find("{")
     if brace_start != -1:
         depth = 0

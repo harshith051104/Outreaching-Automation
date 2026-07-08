@@ -6,6 +6,7 @@ import {
   getNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  clearAllNotifications,
   Notification,
 } from "@/services/task-api";
 import {
@@ -20,6 +21,7 @@ import {
   Calendar,
   ChevronRight,
   Linkedin,
+  Trash2,
 } from "lucide-react";
 
 export default function NotificationsPage() {
@@ -27,6 +29,7 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
 
   useEffect(() => {
     fetchNotificationsList();
@@ -53,6 +56,19 @@ export default function NotificationsPage() {
       console.error("Failed to mark all notifications read:", err);
     } finally {
       setMarkingAll(false);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm("Clear all notifications? This cannot be undone.")) return;
+    try {
+      setClearingAll(true);
+      await clearAllNotifications();
+      setNotifications([]);
+    } catch (err) {
+      console.error("Failed to clear notifications:", err);
+    } finally {
+      setClearingAll(false);
     }
   };
 
@@ -118,19 +134,33 @@ export default function NotificationsPage() {
             Stay updated with assignments, community feedback, and direct teammate interactions.
           </p>
         </div>
-        {notifications.some((n) => !n.is_read) && (
-          <div className="relative z-10">
+        {notifications.length > 0 && (
+          <div className="relative z-10 flex items-center gap-2">
+            {notifications.some((n) => !n.is_read) && (
+              <button
+                onClick={handleMarkAllRead}
+                disabled={markingAll}
+                className="flex items-center gap-1 px-4 py-2 rounded-lg text-xs font-bold transition-all hover:opacity-90 shadow-md"
+                style={{
+                  background: "var(--banner-btn-bg, rgba(0,0,0,0.05))",
+                  border: "1px solid var(--banner-btn-border, rgba(0,0,0,0.12))",
+                  color: "var(--banner-btn-text, var(--banner-text))",
+                }}
+              >
+                <Check className="h-4 w-4" /> Mark All Read
+              </button>
+            )}
             <button
-              onClick={handleMarkAllRead}
-              disabled={markingAll}
+              onClick={handleClearAll}
+              disabled={clearingAll}
               className="flex items-center gap-1 px-4 py-2 rounded-lg text-xs font-bold transition-all hover:opacity-90 shadow-md"
               style={{
-                background: "var(--banner-btn-bg, rgba(0,0,0,0.05))",
-                border: "1px solid var(--banner-btn-border, rgba(0,0,0,0.12))",
-                color: "var(--banner-btn-text, var(--banner-text))",
+                background: "rgba(239,68,68,0.1)",
+                border: "1px solid rgba(239,68,68,0.2)",
+                color: "#ef4444",
               }}
             >
-              <Check className="h-4 w-4" /> Mark All Read
+              <Trash2 className="h-4 w-4" /> Clear All
             </button>
           </div>
         )}

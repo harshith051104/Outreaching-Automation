@@ -213,9 +213,7 @@ export default function ChatbotPage() {
   const fetchPendingApprovals = async () => {
     try {
       const currentSessionId = activeSessionIdRef.current;
-      // Scope approvals to the current session so they don't bleed into other tabs
-      const params = currentSessionId ? { chat_session_id: currentSessionId } : {};
-      const response = await api.get("/chatbot/approvals", { params });
+      const response = await api.get("/chatbot/approvals");
       if (response.status === 200) {
         const data = response.data;
         setPendingApprovals(data);
@@ -224,7 +222,8 @@ export default function ChatbotPage() {
         if (currentSessionId) {
           setMessages((currentMessages) => {
             const existingIds = new Set(currentMessages.map(m => m.pendingApproval?.action_id).filter(Boolean));
-            const newApprovals = data.filter((app: ApprovalAction) => !existingIds.has(app.action_id));
+            // Scope injection to current session only
+            const newApprovals = data.filter((app: ApprovalAction) => app.chat_session_id === currentSessionId && !existingIds.has(app.action_id));
             
             if (newApprovals.length > 0) {
               let updatedMessages = [...currentMessages];
@@ -607,8 +606,11 @@ export default function ChatbotPage() {
                     onClick={() => setActiveSessionId(session.id)}
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">
+                      <div className="text-sm font-medium truncate flex items-center gap-1.5">
                         {session.title}
+                        {pendingApprovals.some((app) => app.chat_session_id === session.id) && (
+                          <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse shrink-0" title="Pending approval" />
+                        )}
                       </div>
                       <div className="text-xs text-gray-400">
                         {session.message_count} messages
@@ -797,7 +799,7 @@ export default function ChatbotPage() {
                 .map((m) => m.pendingApproval?.action_id)
                 .filter(Boolean) as string[];
               const filteredApprovals = pendingApprovals.filter(
-                (app) => !visibleActionIds.includes(app.action_id)
+                (app) => !visibleActionIds.includes(app.action_id) && app.chat_session_id === activeSessionId
               );
 
               if (filteredApprovals.length === 0) return null;

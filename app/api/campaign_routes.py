@@ -107,6 +107,19 @@ async def stats(
     return await get_campaign_stats(campaign_id)
 
 
+@router.delete("/{campaign_id}/ai-cache/{lead_id}", summary="Clear AI placeholder cache for a lead")
+async def clear_ai_cache(
+    campaign_id: str,
+    lead_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Clear cached AI-generated placeholder values so they regenerate on next send."""
+    await get_campaign(campaign_id, current_user["id"])
+    from app.tasks.campaign_tasks import _clear_cached_placeholders
+    await _clear_cached_placeholders(campaign_id, lead_id)
+    return {"status": "cleared", "campaign_id": campaign_id, "lead_id": lead_id}
+
+
 @router.get("/debug/dump", summary="Debug DB Dump")
 async def debug_dump():
     from app.config.mongodb_config import get_database

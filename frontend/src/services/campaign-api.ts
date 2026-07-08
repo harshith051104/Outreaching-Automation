@@ -2,8 +2,8 @@ import api from "./api";
 import type { Campaign, CampaignCreate } from "@/types/campaign";
 import type { CampaignAnalytics } from "@/types/analytics";
 
-export const getCampaigns = async (): Promise<Campaign[]> => {
-  const response = await api.get<Campaign[]>("/campaigns");
+export const getCampaigns = async (limit: number = 100): Promise<Campaign[]> => {
+  const response = await api.get<Campaign[]>("/campaigns", { params: { limit } });
   return response.data;
 };
 
@@ -39,4 +39,8 @@ export const getCampaignStats = async (id: string): Promise<CampaignAnalytics> =
 
 export const deleteCampaign = async (id: string): Promise<void> => {
   await api.delete(`/campaigns/${id}`);
+};
+
+export const clearAICache = async (campaignId: string, leadId: string): Promise<void> => {
+  await api.delete(`/campaigns/${campaignId}/ai-cache/${leadId}`);
 };

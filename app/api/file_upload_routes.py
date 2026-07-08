@@ -35,6 +35,16 @@ async def upload(
             detail="No filename provided"
         )
     
+    # ponytail: whitelist safe extensions to prevent arbitrary file upload & XSS
+    import os
+    ext = os.path.splitext(file.filename)[1].lower() if "." in file.filename else ""
+    allowed_extensions = {".csv", ".xlsx", ".xls", ".pdf", ".png", ".jpg", ".jpeg", ".txt", ".docx", ".doc"}
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File extension {ext} not allowed. Supported formats: CSV, Excel, PDF, images, Word, text."
+        )
+    
     content = await file.read()
     file_size_mb = len(content) / (1024 * 1024)
     logger.info(f"File content length: {len(content)} bytes ({file_size_mb:.2f} MB)")

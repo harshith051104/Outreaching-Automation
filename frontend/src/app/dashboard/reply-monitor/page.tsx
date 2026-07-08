@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuthStore } from "@/store/auth-store";
-import { useWebSocket } from "@/hooks/use-websocket";
 import {
   getPendingReplies,
   generateDraft,
@@ -96,30 +95,7 @@ export default function ReplyMonitorPage() {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  const handleWsMessage = useCallback(
-    (message: { type: string; data: Record<string, unknown> }) => {
-      if (message.type === "new_reply") {
-        setNotification(`New reply from ${message.data.from_email || "unknown"}`);
-        loadData();
-        setTimeout(() => setNotification(null), 5000);
-      } else if (message.type === "draft_ready") {
-        setNotification("Draft response generated!");
-        loadData();
-        setTimeout(() => setNotification(null), 3000);
-      } else if (message.type === "draft_sent") {
-        setNotification("Response sent successfully!");
-        loadData();
-        setTimeout(() => setNotification(null), 3000);
-      }
-    },
-    [loadData]
-  );
 
-  const { isConnected } = useWebSocket({
-    userId: user?.id || "",
-    onMessage: handleWsMessage,
-    enabled: !!user?.id,
-  });
 
   const handleGenerateDraft = async (replyId: string, gmailAccountId?: string) => {
     setGeneratingDraft(replyId);
@@ -280,9 +256,9 @@ export default function ReplyMonitorPage() {
           </button>
 
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full" style={{ background: isConnected ? "#10b981" : "#ef4444" }} />
+            <span className="h-2 w-2 rounded-full" style={{ background: "#10b981" }} />
             <span className="text-sm" style={{ color: "var(--sidebar-text-muted)" }}>
-              {isConnected ? "Connected" : "Disconnected"}
+              Live
             </span>
           </div>
         </div>

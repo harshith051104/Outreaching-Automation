@@ -19,6 +19,7 @@ class LeadCreate(BaseModel):
     role: str = ""
     focus: str = ""
     campaign_id: str
+    custom_fields: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 class LeadUpdate(BaseModel):
@@ -31,6 +32,7 @@ class LeadUpdate(BaseModel):
     focus: Optional[str] = None
     status: Optional[str] = None
     score: Optional[float] = None
+    custom_fields: Optional[dict[str, Any]] = None
     research_data: Optional[dict[str, Any]] = None
     personalization_data: Optional[dict[str, Any]] = None
 
@@ -48,6 +50,7 @@ class LeadResponse(BaseModel):
     focus: str = ""
     status: str
     score: float
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
     research_data: dict[str, Any]
     personalization_data: dict[str, Any]
     created_at: datetime

@@ -12,7 +12,7 @@ from fastapi import HTTPException, status
 from app.config.mongodb_config import get_database
 from app.schemas.lead import LeadCreate
 from app.utils.id_generator import generate_id
-from app.utils.csv_parser import parse_leads_csv
+from app.utils.csv_parser import parse_leads_file
 from app.utils.validators import validate_email_format
 
 
@@ -52,6 +52,8 @@ async def create_lead(user_id: str, data: LeadCreate) -> dict:
         "company": getattr(data, "company", "") or "",
         "role": getattr(data, "role", "") or "",
         "website": getattr(data, "website", "") or "",
+        "focus": getattr(data, "focus", "") or "",
+        "custom_fields": getattr(data, "custom_fields", {}) or {},
         "status": "new",
         "score": 0.0,
         "research_data": {},
@@ -163,10 +165,10 @@ async def delete_lead(lead_id: str, user_id: str) -> None:
 
 
 async def import_leads_csv(
-    campaign_id: str, user_id: str, file_content: bytes
+    campaign_id: str, user_id: str, file_content: bytes, filename: str = "leads.csv"
 ) -> dict:
     """
-    Parse a CSV file, validate each row, and bulk-insert leads.
+    Parse a lead file (CSV, Excel, or PDF), validate each row, and bulk-insert leads.
 
     Returns summary with imported count, skipped count, and errors.
     """
@@ -181,7 +183,7 @@ async def import_leads_csv(
             detail="Campaign not found.",
         )
 
-    rows = parse_leads_csv(file_content)
+    rows = await parse_leads_file(file_content, filename)
 
     imported = 0
     skipped = 0
@@ -211,6 +213,25 @@ async def import_leads_csv(
         last_name = (row.get("last_name") or "").strip()
         full_name = f"{first_name} {last_name}".strip() or email
 
+        role = (row.get("title") or row.get("job_title") or "").strip()
+        website = (row.get("website") or row.get("url") or "").strip()
+        focus = (row.get("focus") or "").strip()
+        phone = (row.get("phone") or "").strip()
+        linkedin_url = (row.get("linkedin_url") or "").strip()
+        industry = (row.get("industry") or "").strip()
+
+        standard_keys = {
+            "email", "first_name", "last_name", "company", "title", "job_title", 
+            "website", "url", "focus", "phone", "linkedin_url", "linkedin", "industry"
+        }
+
+        custom_fields = {}
+        for k, v in row.items():
+            if k and k not in standard_keys and k.strip():
+                val_str = str(v).strip()
+                if val_str:
+                    custom_fields[k] = val_str
+
         lead_doc = {
             "id": generate_id(),
             "user_id": user_id,
@@ -220,10 +241,15 @@ async def import_leads_csv(
             "last_name": last_name,
             "email": email,
             "company": (row.get("company") or "").strip(),
-            "role": (row.get("title") or row.get("job_title") or "").strip(),
-            "website": (row.get("website") or row.get("url") or "").strip(),
+            "role": role,
+            "website": website,
+            "focus": focus,
+            "phone": phone,
+            "linkedin_url": linkedin_url,
+            "industry": industry,
             "status": "new",
             "score": 0.0,
+            "custom_fields": custom_fields,
             "research_data": {},
             "personalization_data": {},
             "created_at": now,

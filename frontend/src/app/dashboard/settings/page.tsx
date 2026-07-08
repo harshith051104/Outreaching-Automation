@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import api from "@/services/api";
 import { useAuthStore } from "@/store/auth-store";
 import { getGmailAccounts, getGmailAuthUrl, disconnectGmailAccount } from "@/services/gmail-api";
 import { getIntegrations, saveIntegration, deleteIntegration } from "@/services/integrations-api";
@@ -12,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import IntegrationsCenter from "./integrations-center";
 import { 
+  Terminal,
+  DatabaseBackup,
   User, 
   Settings as SettingsIcon, 
   Cpu, 
@@ -108,6 +111,89 @@ export default function SettingsPage() {
   });
   const [preferencesSuccess, setPreferencesSuccess] = useState("");
 
+  // States for Diagnostics Tab
+  const [healthStatus, setHealthStatus] = useState<Record<string, { status: string; message: string }> | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [jobStats, setJobStats] = useState<any>(null);
+  const [jobStatsLoading, setJobStatsLoading] = useState(false);
+  const [restoreJson, setRestoreJson] = useState("");
+  const [restoreSuccess, setRestoreSuccess] = useState("");
+  const [restoreError, setRestoreError] = useState("");
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
+
+  const fetchHealthStatus = async () => {
+    setHealthLoading(true);
+    try {
+      const response = await api.get("/system/health-check");
+      setHealthStatus(response.data);
+    } catch (err) {
+      console.error("Failed to fetch system health status:", err);
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
+  const fetchJobStats = async () => {
+    setJobStatsLoading(true);
+    try {
+      const response = await api.get("/system/background-jobs");
+      setJobStats(response.data);
+    } catch (err) {
+      console.error("Failed to fetch background jobs stats:", err);
+    } finally {
+      setJobStatsLoading(false);
+    }
+  };
+
+  const fetchAuditLogs = async () => {
+    setAuditLogsLoading(true);
+    try {
+      const response = await api.get("/audit-logs");
+      setAuditLogs(response.data);
+    } catch (err) {
+      console.error("Failed to fetch audit logs:", err);
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  };
+
+  const handleExportBackup = async () => {
+    try {
+      const response = await api.get("/system/backup");
+      const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: "application/json" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `outreach_backup_${new Date().toISOString().split("T")[0]}.json`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      console.error("Failed to export backup:", err);
+      alert("Backup export failed. Please try again.");
+    }
+  };
+
+  const handleRestoreBackup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!restoreJson.trim()) return;
+    setRestoreSuccess("");
+    setRestoreError("");
+    try {
+      const parsed = JSON.parse(restoreJson);
+      const response = await api.post("/system/restore", parsed);
+      const imported = response.data.imported || {};
+      setRestoreSuccess(
+        `Backup restored successfully! Imported: ${imported.campaigns || 0} campaigns, ${imported.leads || 0} leads, ${imported.system_settings || 0} settings.`
+      );
+      setRestoreJson("");
+    } catch (err: any) {
+      console.error("Failed to restore backup:", err);
+      setRestoreError(err.message || "Invalid JSON format or restoration failed.");
+    }
+  };
+
   // Load Gmail accounts & LocalStorage Settings on Mount
   const loadLlmStatus = async () => {
     try {
@@ -134,6 +220,9 @@ export default function SettingsPage() {
   useEffect(() => {
     loadGmail();
     loadLlmStatus();
+    fetchHealthStatus();
+    fetchJobStats();
+    fetchAuditLogs();
 
     // Load API key overrides from localStorage
     const savedApiKeys = localStorage.getItem("outreach_settings_api_keys");
@@ -302,7 +391,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="profile" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 max-w-3xl mb-8">
+        <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 max-w-4xl mb-8">
           <TabsTrigger value="profile" className="gap-2">
             <User className="h-4 w-4" />
             Profile
@@ -318,6 +407,10 @@ export default function SettingsPage() {
           <TabsTrigger value="preferences" className="gap-2">
             <Sliders className="h-4 w-4" />
             Preferences
+          </TabsTrigger>
+          <TabsTrigger value="diagnostics" className="gap-2">
+            <ShieldAlert className="h-4 w-4" />
+            Diagnostics
           </TabsTrigger>
         </TabsList>
 
@@ -898,6 +991,200 @@ export default function SettingsPage() {
               </CardFooter>
             </form>
           </Card>
+        </TabsContent>
+
+        {/* 5. Diagnostics Tab Content */}
+        <TabsContent value="diagnostics" className="space-y-6">
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Operational Health */}
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <CardTitle>Operational Infrastructure Health</CardTitle>
+                    <CardDescription>Real-time status of backend service dependencies.</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={fetchHealthStatus} disabled={healthLoading}>
+                    {healthLoading ? "Refreshing..." : "Refresh Health"}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {healthStatus ? (
+                  <div className="space-y-3">
+                    {Object.entries(healthStatus).map(([service, info]: [string, any]) => {
+                      const isHealthy = info.status === "Healthy" || info.status === "Available" || info.status === "Connected";
+                      return (
+                        <div key={service} className="flex items-center justify-between p-3 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/50">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-semibold capitalize">{service.replace("_", " ")}</span>
+                            <span className="text-xs text-[var(--sidebar-text-muted)]">{info.message}</span>
+                          </div>
+                          <Badge variant={isHealthy ? "default" : "destructive"}>
+                            {info.status}
+                          </Badge>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-[var(--sidebar-text-muted)] text-center py-4">No health data available. Click refresh.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Background Jobs */}
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <CardTitle>Background Job Engine</CardTitle>
+                    <CardDescription>Scheduled outreach queues and Celery task execution.</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={fetchJobStats} disabled={jobStatsLoading}>
+                    {jobStatsLoading ? "Refreshing..." : "Refresh Queue"}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {jobStats ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-4 gap-4 text-center">
+                      <div className="p-3 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/50">
+                        <div className="text-xl font-bold text-blue-400">{jobStats.summary?.pending || 0}</div>
+                        <div className="text-[10px] text-[var(--sidebar-text-muted)] capitalize">Pending</div>
+                      </div>
+                      <div className="p-3 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/50">
+                        <div className="text-xl font-bold text-emerald-400">{jobStats.summary?.executed || 0}</div>
+                        <div className="text-[10px] text-[var(--sidebar-text-muted)] capitalize">Executed</div>
+                      </div>
+                      <div className="p-3 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/50">
+                        <div className="text-xl font-bold text-amber-400">{jobStats.summary?.running || 0}</div>
+                        <div className="text-[10px] text-[var(--sidebar-text-muted)] capitalize">Running</div>
+                      </div>
+                      <div className="p-3 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/50">
+                        <div className="text-xl font-bold text-rose-400">{jobStats.summary?.failed || 0}</div>
+                        <div className="text-[10px] text-[var(--sidebar-text-muted)] capitalize">Failed</div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-semibold text-[var(--sidebar-text-muted)] uppercase tracking-wider">Recent Executed Tasks</h4>
+                      <div className="max-h-[160px] overflow-y-auto space-y-1.5 pr-1">
+                        {jobStats.recent_tasks?.length > 0 ? (
+                          jobStats.recent_tasks.map((task: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center text-xs p-2 rounded border border-[var(--card-border)]/50 bg-[var(--card-bg)]/20">
+                              <span className="font-mono text-[10px] truncate max-w-[120px]">{task.campaign_id}</span>
+                              <Badge variant={task.status === "executed" ? "default" : task.status === "failed" ? "destructive" : "secondary"}>
+                                {task.status}
+                              </Badge>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center text-xs text-[var(--sidebar-text-muted)] py-4">No recent task logs.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-[var(--sidebar-text-muted)] text-center py-4">No queue stats available. Click refresh.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Backup & Restore */}
+            <Card>
+              <CardHeader>
+                <CardTitle>System Backup & Restore</CardTitle>
+                <CardDescription>Export your setup metadata or import them to restore campaign data.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {restoreSuccess && (
+                  <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-sm text-emerald-400">
+                    <Check className="h-4 w-4" />
+                    {restoreSuccess}
+                  </div>
+                )}
+                {restoreError && (
+                  <div className="flex items-center gap-2 rounded-md bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
+                    <AlertTriangle className="h-4 w-4" />
+                    {restoreError}
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-4">
+                  <div className="space-y-2">
+                    <Label>Database Operations</Label>
+                    <Button onClick={handleExportBackup} className="w-full flex items-center justify-center gap-2">
+                      <DatabaseBackup className="h-4 w-4" />
+                      Export Outreach Backup JSON
+                    </Button>
+                    <p className="text-[10px] text-[var(--sidebar-text-muted)]">
+                      Downloads your campaigns, leads, and custom copywriting configuration.
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleRestoreBackup} className="space-y-2 border-t border-[var(--card-border)] pt-4">
+                    <Label htmlFor="restore-json">Restore from Backup JSON</Label>
+                    <textarea
+                      id="restore-json"
+                      rows={5}
+                      value={restoreJson}
+                      onChange={(e) => setRestoreJson(e.target.value)}
+                      placeholder="Paste exported backup JSON text here..."
+                      className={textareaStyleClass}
+                    />
+                    <Button type="submit" variant="secondary" className="w-full">
+                      Import and Restore Data
+                    </Button>
+                  </form>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Audit Log Trail */}
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <CardTitle>Platform Audit Logs</CardTitle>
+                    <CardDescription>Historical security actions audit log trail.</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={fetchAuditLogs} disabled={auditLogsLoading}>
+                    {auditLogsLoading ? "Refreshing..." : "Refresh Logs"}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="max-h-[360px] overflow-y-auto space-y-2 pr-1">
+                  {auditLogs.length > 0 ? (
+                    auditLogs.map((log: any, idx: number) => (
+                      <div key={idx} className="p-2.5 rounded border border-[var(--card-border)] bg-[var(--card-bg)]/30 space-y-1 text-xs">
+                        <div className="flex justify-between font-semibold">
+                          <span className="text-blue-400">{log.action}</span>
+                          <span className="text-[10px] text-[var(--sidebar-text-muted)]">{new Date(log.timestamp).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-[var(--sidebar-text-muted)]">
+                          <span>User: {log.user_id}</span>
+                          <span>IP: {log.client_ip}</span>
+                        </div>
+                        {log.resource && (
+                          <div className="text-[10px] truncate">
+                            <span className="text-[var(--sidebar-text-muted)]">Resource: </span>
+                            <span className="font-mono">{log.resource}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center text-xs text-[var(--sidebar-text-muted)] py-8">No audit log records found.</div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

@@ -290,6 +290,11 @@ class TaskSchedulerService:
         lead_name = lead.get("name", "") or lead.get("first_name", "") or ""
         subject = _format_template(subject_template, lead, lead_name, sender_name, sender_email)
         body = _format_template(body_template, lead, lead_name, sender_name, sender_email)
+
+        # AI-generate any remaining unresolved placeholders
+        from app.tasks.campaign_tasks import _ai_generate_placeholders
+        subject = await _ai_generate_placeholders(subject, lead, campaign, lead_name, sender_name)
+        body = await _ai_generate_placeholders(body, lead, campaign, lead_name, sender_name)
         
         # Convert plain text newlines and markdown formatting to HTML
         body_html = convert_text_to_html(body)

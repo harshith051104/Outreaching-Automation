@@ -399,3 +399,32 @@ async def list_suggestion_comments(
         })
 
     return res_list
+
+
+@router.delete(
+    "/{suggestion_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a suggestion",
+)
+async def delete_suggestion(
+    suggestion_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    db = await get_database()
+    suggestion_doc = await db.suggestions.find_one({"_id": suggestion_id})
+    if not suggestion_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Suggestion not found.",
+        )
+
+    # Allow creator or admin to delete
+    if suggestion_doc.get("user_id") != current_user["id"] and not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this suggestion.",
+        )
+
+    await db.suggestions.delete_one({"_id": suggestion_id})
+    await db.suggestion_comments.delete_many({"suggestion_id": suggestion_id})
+    return None

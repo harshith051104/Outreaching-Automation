@@ -38,6 +38,8 @@ async def create_email(user_id: str, data: Any, tracking_id: Optional[str] = Non
         "sent_at": None,
         "created_at": now,
         "updated_at": now,
+        "guardrail": getattr(data, "guardrail", None),
+        "correlation_id": getattr(data, "correlation_id", None),
     }
 
     await db.emails.insert_one(email_doc)

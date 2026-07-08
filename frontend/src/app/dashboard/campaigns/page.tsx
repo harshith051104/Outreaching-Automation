@@ -35,6 +35,13 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterTab>("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const campaignsPerPage = 20;
+
+  const handleFilterChange = (tab: FilterTab) => {
+    setFilter(tab);
+    setCurrentPage(1);
+  };
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editCampaign, setEditCampaign] = useState<Campaign | null>(null);
   const [editForm, setEditForm] = useState({
@@ -98,6 +105,13 @@ export default function CampaignsPage() {
   };
 
   const filteredCampaigns = filter === "all" ? campaigns : campaigns.filter((c) => c.status === filter);
+  
+  // ponytail: standard pagination configuration (YAGNI, minimal state logic)
+  const totalPages = Math.ceil(filteredCampaigns.length / campaignsPerPage);
+  const activePage = Math.min(currentPage, Math.max(1, totalPages));
+  const indexOfLastCampaign = activePage * campaignsPerPage;
+  const indexOfFirstCampaign = indexOfLastCampaign - campaignsPerPage;
+  const currentCampaigns = filteredCampaigns.slice(indexOfFirstCampaign, indexOfLastCampaign);
   const statusCounts = {
     all: campaigns.length,
     active: campaigns.filter((c) => c.status === "active").length,
@@ -164,7 +178,7 @@ export default function CampaignsPage() {
             const isActive = filter === tab;
             const cfg = STATUS_CONFIG[tab] || STATUS_CONFIG.draft;
             return (
-              <button key={tab} onClick={() => setFilter(tab)} style={{
+              <button key={tab} onClick={() => handleFilterChange(tab)} style={{
                 display: 'flex', alignItems: 'center', gap: '7px',
                 padding: '8px 16px', borderRadius: '10px',
                 background: isActive ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'var(--card-bg)',
@@ -234,8 +248,9 @@ export default function CampaignsPage() {
           </Link>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {filteredCampaigns.map((campaign) => {
+        <div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {currentCampaigns.map((campaign) => {
             const cfg = STATUS_CONFIG[campaign.status] || STATUS_CONFIG.draft;
             const isLoading = actionLoading === campaign.id;
             return (
@@ -378,6 +393,75 @@ export default function CampaignsPage() {
               </div>
             );
           })}
+          </div>
+
+          {/* ponytail: pagination control panel */}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '24px' }}>
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={activePage === 1}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--card-border)',
+                  background: 'var(--card-bg)',
+                  color: activePage === 1 ? 'rgba(255,255,255,0.25)' : 'var(--foreground-color)',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: activePage === 1 ? 'not-allowed' : 'pointer',
+                  opacity: activePage === 1 ? 0.5 : 1,
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                Previous
+              </button>
+              
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
+                const isActive = activePage === pageNum;
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '8px',
+                      border: isActive ? 'none' : '1px solid var(--card-border)',
+                      background: isActive ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'var(--card-bg)',
+                      color: isActive ? 'white' : 'var(--foreground-color)',
+                      fontSize: '13px',
+                      fontWeight: '700',
+                      cursor: 'pointer',
+                      boxShadow: isActive ? '0 4px 12px rgba(124,92,255,0.3)' : 'none',
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                disabled={activePage === totalPages}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--card-border)',
+                  background: 'var(--card-bg)',
+                  color: activePage === totalPages ? 'rgba(255,255,255,0.25)' : 'var(--foreground-color)',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: activePage === totalPages ? 'not-allowed' : 'pointer',
+                  opacity: activePage === totalPages ? 0.5 : 1,
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
 

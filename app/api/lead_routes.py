@@ -65,7 +65,10 @@ async def update_lead_route(
 
     Accepts a partial dict of fields to update.
     """
-    return await update_lead(lead_id, current_user["id"], data)
+    from app.utils.security import sanitize_nosql
+    sanitized_data = sanitize_nosql(data)
+    # ponytail: sanitize_nosql prevents operator injection
+    return await update_lead(lead_id, current_user["id"], sanitized_data)
 
 
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete lead")
@@ -77,25 +80,33 @@ async def delete_lead_route(
     await delete_lead(lead_id, current_user["id"])
 
 
-@router.post("/upload-csv", response_model=dict, summary="Upload leads via CSV")
+@router.post("/upload-csv", response_model=dict, summary="Upload leads via CSV/Excel/PDF")
 async def upload_csv(
     campaign_id: str = Query(..., description="Campaign ID to import leads into"),
-    file: UploadFile = File(..., description="CSV file with lead data"),
+    file: UploadFile = File(..., description="Lead import file (CSV, Excel, or PDF)"),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Bulk import leads from a CSV file.
+    Bulk import leads from a CSV, Excel (.xlsx/.xls), or PDF file.
 
-    Supported columns: email, first_name, last_name, company, title, phone, linkedin_url
+    Supported columns: email, first_name, last_name, company, title, phone, linkedin_url, website, focus
     """
-    if not file.filename or not file.filename.lower().endswith(".csv"):
+    if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must be a CSV file.",
+            detail="No filename provided.",
+        )
+        
+    filename_lower = file.filename.lower()
+    allowed_exts = (".csv", ".xlsx", ".xls", ".pdf")
+    if not filename_lower.endswith(allowed_exts):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File must be one of: {', '.join(allowed_exts)}",
         )
 
     content = await file.read()
-    return await import_leads_csv(campaign_id, current_user["id"], content)
+    return await import_leads_csv(campaign_id, current_user["id"], content, file.filename)
 
 
 @router.get("/{lead_id}/engagement", response_model=dict, summary="Get lead engagement history")
@@ -106,3 +117,58 @@ async def get_lead_engagement_route(
     """Get all tracking events for a lead (opens, clicks, replies)."""
     await get_lead(lead_id, current_user["id"])
     return await get_lead_engagement(lead_id)
+
+
+from pydantic import BaseModel
+
+class GoogleSheetImportRequest(BaseModel):
+    campaign_id: str
+    url: str
+
+def extract_google_sheet_csv_url(url: str) -> str:
+    """
+    ponytail: convert a standard Google Sheets sharing URL into the direct CSV export link.
+    """
+    import re
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
+    if not match:
+        raise ValueError("Invalid Google Sheets URL format.")
+    spreadsheet_id = match.group(1)
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv"
+
+
+@router.post("/import-google-sheet", summary="Import leads directly from a Google Sheet URL")
+async def import_from_google_sheet(
+    body: GoogleSheetImportRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Import leads directly from a shared Google Sheets URL.
+    The sheet must be accessible (e.g. 'Anyone with link can view' sharing turned on).
+    """
+    import httpx
+    
+    try:
+        csv_url = extract_google_sheet_csv_url(body.url)
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(err)
+        )
+        
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(csv_url, follow_redirects=True)
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to fetch Google Sheet. HTTP Status: {response.status_code}. Ensure the sheet sharing is set to 'Anyone with the link can view'."
+                )
+            content = response.content
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error connecting to Google Sheets: {exc}"
+        )
+        
+    return await import_leads_csv(body.campaign_id, current_user["id"], content, "leads.csv")

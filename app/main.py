@@ -44,7 +44,6 @@ async def lifespan(app: FastAPI):
     """Manage application lifecycle: connect on startup, disconnect on shutdown."""
     await mongodb_client.connect()
     await mongodb_client.create_indexes()
-
     # Run database migration for existing leads missing the 'id' field
     try:
         from app.config.mongodb_config import get_database
@@ -64,16 +63,20 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to run lead ID migration: {exc}")
 
-    # Run database migration: fix campaign_ids that were saved as names instead of UUIDs
+    # Run database migration: fix campaign_ids that were saved as names instead of UUIDs, and fix empty ones
     try:
         import re
+        from datetime import datetime, timezone
         from app.config.mongodb_config import get_database
         db = await get_database()
         campaigns = await db.campaigns.find({"status": {"$ne": "deleted"}}).to_list(length=1000)
         migrated_leads_count = 0
+        
+        # 1. Fix leads with campaign name as campaign_id
         for campaign in campaigns:
             camp_name = campaign.get("name")
             camp_id = campaign.get("id")
+            user_id = campaign.get("user_id")
             if camp_name and camp_id:
                 leads_to_fix = db.leads.find({
                     "campaign_id": {"$regex": f"^{re.escape(camp_name)}$", "$options": "i"}
@@ -81,18 +84,37 @@ async def lifespan(app: FastAPI):
                 async for lead_doc in leads_to_fix:
                     await db.leads.update_one(
                         {"_id": lead_doc["_id"]},
-                        {"$set": {"campaign_id": camp_id, "updated_at": datetime.now(timezone.utc)}}
+                        {"$set": {"campaign_id": camp_id, "user_id": user_id, "updated_at": datetime.now(timezone.utc)}}
                     )
                     migrated_leads_count += 1
-                
-                # Update total_leads count for the campaign
-                total_leads = await db.leads.count_documents({"campaign_id": camp_id})
-                await db.campaigns.update_one(
-                    {"id": camp_id},
-                    {"$set": {"total_leads": total_leads}}
+
+        # 2. Fix leads with null/empty campaign_id (associate with the "Universal Idea" campaign, or first campaign)
+        fixed_orphans = 0
+        if campaigns:
+            universal_camp = next((c for c in campaigns if "universal" in c.get("name", "").lower()), campaigns[0])
+            first_camp_id = universal_camp["id"]
+            first_user_id = universal_camp["user_id"]
+            
+            leads_to_fix = db.leads.find({"$or": [{"campaign_id": None}, {"campaign_id": ""}]})
+            async for lead_doc in leads_to_fix:
+                await db.leads.update_one(
+                    {"_id": lead_doc["_id"]},
+                    {"$set": {"campaign_id": first_camp_id, "user_id": first_user_id, "updated_at": datetime.now(timezone.utc)}}
                 )
-        if migrated_leads_count > 0:
-            logger.info("Database Migration: Fixed campaign_id for %d leads.", migrated_leads_count)
+                fixed_orphans += 1
+                
+        # 3. Update total_leads count for all campaigns
+        for campaign in campaigns:
+            camp_id = campaign.get("id")
+            total_leads = await db.leads.count_documents({"campaign_id": camp_id})
+            await db.campaigns.update_one(
+                {"id": camp_id},
+                {"$set": {"total_leads": total_leads}}
+            )
+            
+
+        if migrated_leads_count > 0 or fixed_orphans > 0:
+            logger.info("Database Migration: Fixed campaign_id for %d name-matched leads and %d orphaned leads.", migrated_leads_count, fixed_orphans)
     except Exception as exc:
         logger.error(f"Failed to run campaign ID lead migration: {exc}")
 
@@ -433,6 +455,90 @@ async def _sheets_sync_loop():
         await asyncio.sleep(900)  # 15 minutes
 
 
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class CleanDoubleSlashesMiddleware(BaseHTTPMiddleware):
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.scope.get("path", "")
+        if "//" in path:
+            cleaned = path
+            while "//" in cleaned:
+                cleaned = cleaned.replace("//", "/")
+            request.scope["path"] = cleaned
+            if "raw_path" in request.scope:
+                request.scope["raw_path"] = cleaned.encode("utf-8")
+        return await call_next(request)
+
+class AddNoCacheHeaderMiddleware(BaseHTTPMiddleware):
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+
+import contextvars
+correlation_id_ctx = contextvars.ContextVar("correlation_id", default="-")
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """
+    ponytail: Correlation ID middleware for tracing across services.
+    """
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+    async def dispatch(self, request: Request, call_next):
+        import uuid
+        corr_id = request.headers.get("x-correlation-id") or str(uuid.uuid4())
+        request.state.correlation_id = corr_id
+        token = correlation_id_ctx.set(corr_id)
+        try:
+            response = await call_next(request)
+            response.headers["X-Correlation-ID"] = corr_id
+            return response
+        finally:
+            correlation_id_ctx.reset(token)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    ponytail: Standard security headers middleware.
+    Injects standard security headers to secure FastAPI routes.
+    """
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+    async def dispatch(self, request: Request, call_next):
+        from app.config.settings import settings
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'; object-src 'none';"
+        if not getattr(settings, "DEBUG", False):
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     from app.config.settings import settings
@@ -461,26 +567,10 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
-    @app.middleware("http")
-    async def clean_double_slashes(request: Request, call_next):
-        path = request.scope.get("path", "")
-        if "//" in path:
-            cleaned = path
-            while "//" in cleaned:
-                cleaned = cleaned.replace("//", "/")
-            request.scope["path"] = cleaned
-            if "raw_path" in request.scope:
-                request.scope["raw_path"] = cleaned.encode("utf-8")
-        return await call_next(request)
-
-    @app.middleware("http")
-    async def add_no_cache_header(request: Request, call_next):
-        response = await call_next(request)
-        if request.url.path.startswith("/api"):
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-        return response
+    app.add_middleware(CleanDoubleSlashesMiddleware)
+    app.add_middleware(AddNoCacheHeaderMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(CorrelationIdMiddleware)
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
@@ -495,9 +585,11 @@ def create_app() -> FastAPI:
                 f.write("-" * 40 + "\n")
         except Exception as e:
             logger.error("Failed to write to error_traceback.txt: %s", e)
+        # ponytail: prevent detail leak in production
+        detail_msg = f"Internal server error: {str(exc)}" if settings.DEBUG else "Internal server error."
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Internal server error: {str(exc)}"},
+            content={"detail": detail_msg},
         )
 
 
@@ -509,6 +601,88 @@ def create_app() -> FastAPI:
             "version": "2.0.0",
             "architecture": "metadata-driven",
         }
+
+    @app.get("/health/redis")
+    async def health_redis():
+        from app.config.settings import settings
+        redis_url = getattr(settings, "REDIS_URL", None)
+        if not redis_url:
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": "Not configured"})
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(redis_url, socket_connect_timeout=2)
+            await r.ping()
+            await r.aclose()
+            return {"status": "healthy"}
+        except Exception as e:
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": str(e)})
+
+    @app.get("/health/mongodb")
+    async def health_mongodb():
+        try:
+            from app.config.mongodb_config import get_database
+            db = await get_database()
+            await db.command("ping")
+            return {"status": "healthy"}
+        except Exception as e:
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": str(e)})
+
+    @app.get("/health/playwright")
+    async def health_playwright():
+        try:
+            import playwright
+            import importlib.metadata
+            try:
+                version = importlib.metadata.version("playwright")
+            except Exception:
+                version = "unknown"
+            return {"status": "healthy", "version": version}
+        except Exception as e:
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": str(e)})
+
+    @app.get("/health/celery")
+    async def health_celery():
+        from app.config.settings import settings
+        redis_url = getattr(settings, "REDIS_URL", None)
+        try:
+            from celery import Celery
+            celery_app = Celery("tasks", broker=redis_url)
+            i = celery_app.control.inspect(timeout=1.0)
+            workers = i.ping() if i else None
+            return {"status": "healthy", "workers_online": bool(workers)}
+        except Exception as e:
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": str(e)})
+
+    @app.get("/health/gmail")
+    async def health_gmail():
+        from app.config.settings import settings
+        client_id = getattr(settings, "GOOGLE_CLIENT_ID", "")
+        client_secret = getattr(settings, "GOOGLE_CLIENT_SECRET", "")
+        if client_id and client_secret:
+            return {"status": "healthy", "configured": True}
+        return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": "OAuth Client Credentials not set"})
+
+    @app.get("/health/qdrant")
+    async def health_qdrant():
+        from app.config.settings import settings
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                qdrant_url = getattr(settings, "QDRANT_URL", None)
+                if not qdrant_url:
+                    qdrant_host = getattr(settings, "QDRANT_HOST", "localhost")
+                    qdrant_port = getattr(settings, "QDRANT_PORT", 6333)
+                    qdrant_url = f"http://{qdrant_host}:{qdrant_port}"
+                headers = {}
+                api_key = getattr(settings, "QDRANT_API_KEY", None)
+                if api_key:
+                    headers["api-key"] = api_key
+                r = await client.get(f"{qdrant_url.strip().rstrip('/')}/collections", headers=headers)
+                if r.status_code == 200:
+                    return {"status": "healthy"}
+                return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": f"HTTP {r.status_code}"})
+        except Exception as e:
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": str(e)})
 
     @app.get("/health/linkedin_diagnose")
     async def linkedin_diagnose():
@@ -562,6 +736,8 @@ def create_app() -> FastAPI:
     from app.api.integrations_routes import router as integrations_router
     from app.api.outreach_tracker_routes import router as outreach_tracker_router
     from app.api.chatbot_approval_routes import router as chatbot_approval_router
+    from app.api.audit_routes import router as audit_router
+    from app.api.kb_routes import router as kb_router
 
     api_prefix = settings.API_PREFIX
 
@@ -596,6 +772,8 @@ def create_app() -> FastAPI:
     app.include_router(integrations_router, prefix=api_prefix, tags=["Integrations"])
     app.include_router(outreach_tracker_router, prefix=api_prefix, tags=["Outreach Tracker"])
     app.include_router(chatbot_approval_router, prefix=api_prefix, tags=["Chatbot Approvals"])
+    app.include_router(audit_router, prefix=api_prefix, tags=["Audit Trail"])
+    app.include_router(kb_router, prefix=api_prefix, tags=["AI Knowledge Base"])
 
     return app
 

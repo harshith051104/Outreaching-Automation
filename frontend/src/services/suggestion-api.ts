@@ -99,3 +99,7 @@ export const addSuggestionComment = async (
   });
   return response.data;
 };
+
+export const deleteSuggestion = async (id: string): Promise<void> => {
+  await api.delete(`/suggestions/${id}`);
+};

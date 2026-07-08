@@ -23,6 +23,8 @@ class EmailCreate(BaseModel):
         default=None,
         description="List of attachments with 'filename', 'content' (base64), 'content_type' keys"
     )
+    guardrail: Optional[Dict[str, Any]] = None
+    correlation_id: Optional[str] = None
 
 
 class EmailResponse(BaseModel):

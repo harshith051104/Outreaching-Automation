@@ -324,3 +324,30 @@ async def export_campaign_analytics_to_sheets(
         headers=headers,
         rows=rows
     )
+
+
+@router.get("/deliverability", summary="Check domain deliverability status")
+async def check_deliverability(
+    domain: str = Query(..., description="The sender domain to inspect"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Check SPF, DKIM, and DMARC settings for the specified domain.
+    """
+    from app.services.deliverability_service import check_domain_deliverability
+    return await check_domain_deliverability(domain)
+
+
+@router.get("/campaign/{campaign_id}/health", summary="Get detailed campaign health score")
+async def campaign_health(
+    campaign_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Calculate and return the 0-100 Campaign Health Score with warning checklists.
+    """
+    from app.services.deliverability_service import get_campaign_health_score
+    from app.services.analytics_service import get_campaign_analytics
+    
+    analytics = await get_campaign_analytics(campaign_id, current_user["id"])
+    return get_campaign_health_score(analytics)

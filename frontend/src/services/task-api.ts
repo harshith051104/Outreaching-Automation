@@ -168,6 +168,10 @@ export const markAllNotificationsRead = async (): Promise<void> => {
   await api.post("/notifications/read-all");
 };
 
+export const clearAllNotifications = async (): Promise<void> => {
+  await api.delete("/notifications");
+};
+
 // ── Dashboard Stats ───────────────────────────────────────────────────────
 
 export const getDashboardStats = async (): Promise<DashboardStats> => {

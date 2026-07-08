@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import api from "@/services/api";
 
 export interface ApprovalAction {
@@ -50,7 +50,38 @@ const ACTION_COLORS: Record<string, { border: string; bg: string; badge: string 
 export default function ApprovalCard({ action: initialAction, onDecision }: Props) {
   const [action, setAction] = useState<ApprovalAction>(initialAction);
   const [loading, setLoading] = useState<"approve" | "reject" | "regenerate" | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(() => {
+    if (initialAction.status && initialAction.status !== "pending") {
+      const ok = initialAction.status === "completed" || initialAction.status === "approved" || initialAction.status === "executing";
+      const message = initialAction.status === "completed" || initialAction.status === "approved"
+        ? "✅ Action executed."
+        : initialAction.status === "rejected"
+        ? "❌ Action rejected."
+        : initialAction.status === "executing"
+        ? "⏳ Action is executing..."
+        : `⚠️ Action status: ${initialAction.status}`;
+      return { ok, message };
+    }
+    return null;
+  });
+
+  // Keep state synchronized with props when they change (e.g. during switching sessions)
+  useEffect(() => {
+    setAction(initialAction);
+    if (initialAction.status !== "pending") {
+      const ok = initialAction.status === "completed" || initialAction.status === "approved" || initialAction.status === "executing";
+      const message = initialAction.status === "completed" || initialAction.status === "approved"
+        ? "✅ Action executed."
+        : initialAction.status === "rejected"
+        ? "❌ Action rejected."
+        : initialAction.status === "executing"
+        ? "⏳ Action is executing..."
+        : `⚠️ Action status: ${initialAction.status}`;
+      setResult({ ok, message });
+    } else {
+      setResult(null);
+    }
+  }, [initialAction]);
 
   const colors = ACTION_COLORS[action.action_type] || {
     border: "rgba(124,92,255,0.3)",

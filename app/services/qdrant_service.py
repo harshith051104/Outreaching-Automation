@@ -30,7 +30,7 @@ try:
     def ensure_all_collections() -> None:
         """Create all required Qdrant collections if they don't exist."""
         client = get_qdrant_client()
-        collections = ["campaigns", "leads", "emails", "replies", "signals", "company_research"]
+        collections = ["campaigns", "leads", "emails", "replies", "signals", "company_research", "kb_documents"]
 
         existing = {c.name for c in client.get_collections().collections}
 

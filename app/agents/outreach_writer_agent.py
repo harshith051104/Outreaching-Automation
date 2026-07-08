@@ -29,9 +29,9 @@ def _clean_placeholders(text: str, sender_name: str, sender_email: str, sender_t
         text = re.sub(r"\[Sender\s+Email\]", sender_email, text, flags=re.IGNORECASE)
         text = re.sub(r"\{\{\s*sender_email\s*\}\}", sender_email, text, flags=re.IGNORECASE)
     
-    title_to_use = sender_title or "Founder & CEO"
+    title_to_use = sender_title or "Founder & CEO, ElectraWireless"
     if not sender_title:
-        logger.warning("sender_title not provided to _clean_placeholders - using default 'Founder & CEO'")
+        logger.warning("sender_title not provided to _clean_placeholders - using default 'Founder & CEO, ElectraWireless'")
     text = re.sub(r"\[Your\s+Title\]", title_to_use, text, flags=re.IGNORECASE)
     text = re.sub(r"\[Sender\s+Title\]", title_to_use, text, flags=re.IGNORECASE)
     text = re.sub(r"\{\{\s*sender_title\s*\}\}", title_to_use, text, flags=re.IGNORECASE)
@@ -87,6 +87,14 @@ def write_outreach_email(
         "to the next one. You never use spam trigger words, always include a single clear CTA, and keep emails scannable on mobile devices."
     )
 
+    co_desc = campaign_description.strip() if campaign_description else ""
+    if not co_desc or co_desc == "N/A":
+        co_desc = (
+            "ElectraWireless (Founder & CEO: Shivam Rajput), a company that accelerates the cable-free energy future "
+            "through safe, intelligent wireless power solutions (magnetic resonance, adaptive tuning, Litz wire coil arrays, "
+            "AI load prediction) for homes (workspace charging), mobility (EV wireless charging), and industry (Robotics/AGVs)."
+        )
+
     user_prompt = f"""
 Write a cold outreach email to {lead_name} ({role} at {company}) using the
 personalization data below. The email must feel human-written, avoid spam
@@ -98,7 +106,7 @@ filters, and drive a single clear action.
 - Company: {company}
 
 **Sender's Company Context / Campaign Goal:**
-{campaign_description or "N/A"}
+{co_desc}
 
 **Personalization Data:**
 {personalization_json}
@@ -218,9 +226,13 @@ def _extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if json_match:
-        return json.loads(json_match.group(1))
+    code_block_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+    if code_block_match:
+        block = code_block_match.group(1).strip()
+        try:
+            return json.loads(block)
+        except json.JSONDecodeError:
+            pass
 
     brace_start = text.find("{")
     if brace_start != -1:

@@ -144,9 +144,13 @@ def _extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if json_match:
-        return json.loads(json_match.group(1))
+    code_block_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+    if code_block_match:
+        block = code_block_match.group(1).strip()
+        try:
+            return json.loads(block)
+        except json.JSONDecodeError:
+            pass
 
     brace_start = text.find("{")
     if brace_start != -1:

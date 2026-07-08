@@ -7,6 +7,7 @@ import {
   getSuggestions,
   createSuggestion,
   upvoteSuggestion,
+  deleteSuggestion,
   Suggestion,
 } from "@/services/suggestion-api";
 import {
@@ -22,6 +23,7 @@ import {
   Calendar,
   EyeOff,
   UserCheck,
+  Trash2,
 } from "lucide-react";
 import SuggestionMetrics from "@/components/feedback/SuggestionMetrics";
 
@@ -156,6 +158,19 @@ export default function SuggestionsPage() {
     } catch (err) {
       console.error("Failed to cast vote:", err);
       setSuggestions(originalSuggestions); // rollback
+    }
+  };
+
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm("Delete this suggestion? This cannot be undone.")) return;
+
+    try {
+      await deleteSuggestion(id);
+      setSuggestions(suggestions.filter((s) => s.id !== id));
+    } catch (err) {
+      console.error("Failed to delete suggestion:", err);
     }
   };
 
@@ -463,6 +478,17 @@ export default function SuggestionsPage() {
                       <MessageSquare className="h-3 w-3" />
                       <span>Discussion</span>
                     </Link>
+
+                    {user && (sug.user_id === user.id || (user as any).is_admin) && (
+                      <button
+                        onClick={(e) => handleDelete(sug.id, e)}
+                        className="flex items-center gap-1 font-bold py-1 px-2.5 rounded-lg transition-all hover:opacity-80"
+                        style={{ background: "rgba(239,68,68,0.08)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        <span>Delete</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

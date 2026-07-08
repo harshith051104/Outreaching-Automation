@@ -1,8 +1,9 @@
 import api from "./api";
 import type { Lead, LeadCreate } from "@/types/lead";
 
-export const getLeads = async (campaignId?: string): Promise<Lead[]> => {
-  const params = campaignId ? { campaign_id: campaignId } : {};
+export const getLeads = async (campaignId?: string, limit: number = 200): Promise<Lead[]> => {
+  const params: any = { limit };
+  if (campaignId) params.campaign_id = campaignId;
   const response = await api.get<Lead[]>("/leads", { params });
   return response.data;
 };

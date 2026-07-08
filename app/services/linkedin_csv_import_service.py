@@ -9,8 +9,12 @@ import csv
 import io
 import logging
 import re
+import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+# Increase python's csv field limit to prevent crash on large cells/descriptions
+csv.field_size_limit(13107200)
 
 from app.config.mongodb_config import get_database
 from app.utils.id_generator import generate_id
@@ -75,8 +79,10 @@ def parse_csv_content(csv_content: bytes | str) -> list[dict[str, Any]]:
     reader = csv.DictReader(io.StringIO(csv_content))
     rows = []
     for row in reader:
-        cleaned_row = {k.strip().lower().replace(" ", "_"): v.strip() if v else "" 
-                       for k, v in row.items()}
+        cleaned_row = {
+            (k.strip().lower().replace(" ", "_") if k else "unnamed_col"): (v.strip() if v else "")
+            for k, v in row.items()
+        }
         rows.append(cleaned_row)
     return rows
 
@@ -117,7 +123,7 @@ def extract_lead_fields(row: dict[str, Any]) -> dict[str, Any]:
     lead["first_name"] = first_name
     lead["last_name"] = last_name
     
-    full_name_fields = ["name", "full_name", "fullname", "contact_name", "person_name"]
+    full_name_fields = ["name", "full_name", "fullname", "contact_name", "person_name", "investor's_name", "investors_name", "investor_name"]
     full_name = ""
     for field in full_name_fields:
         if field in row and row[field]:

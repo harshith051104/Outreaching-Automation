@@ -17,6 +17,7 @@ from typing import Any, List, Dict
 from datetime import datetime, timezone
 
 from groq import Groq
+from fastapi import HTTPException, status
 
 from app.config.settings import settings
 from app.config.groq_config import llm_chat_completion
@@ -146,6 +147,132 @@ async def _resolve_message_templates(msg: str, user_id: str) -> str:
     return msg.strip()
 
 
+# Known lead fields that can always be replaced from lead data
+LEAD_DATA_FIELDS = {
+    "name", "first_name", "last_name", "email", "company", "role", "title",
+    "job_title", "website", "linkedin", "linkedin_url", "focus", "investor_focus",
+    "status", "score", "lead_quality_score", "notes", "sender_name", "sender_email",
+    "sender_title", "phone", "industry", "firm_description",
+}
+
+# Common bracket placeholders that map directly to lead fields
+BRACKET_TO_LEAD_FIELD = {
+    "Investor Name": "name",
+    "Investors Name": "name",
+    "Investor's Name": "name",
+    "Your Name": "sender_name",
+    "Sender Name": "sender_name",
+    "Your Email": "sender_email",
+    "Sender Email": "sender_email",
+    "Your Title": "sender_title",
+    "Sender Title": "sender_title",
+    "Firm Name": "company",
+    "Company": "company",
+    "Email": "email",
+    "LinkedIn": "linkedin",
+    "Website": "website",
+    "Phone": "phone",
+    "Focus": "focus",
+    "Investor Focus": "focus",
+    "Investor Focus Area": "focus",
+    "Investor Focus 1": "focus",
+    "Firm Description": "firm_description",
+    "Company Description": "firm_description",
+}
+
+
+def _extract_all_placeholders(text: str) -> list:
+    """Extract all {{double_brace}} and [bracket] placeholders from text."""
+    double = re.findall(r"\{\{([^}]+)\}\}", text)
+    bracket = re.findall(r"\[([^\]]+)\]", text)
+    return list(set(double + bracket))
+
+
+def _is_lead_field_placeholder(name: str) -> bool:
+    """Check if a placeholder name maps to a known lead data field."""
+    clean = name.strip().lower().replace(" ", "_").replace("-", "_")
+    if clean in LEAD_DATA_FIELDS:
+        return True
+    if name.strip() in BRACKET_TO_LEAD_FIELD:
+        return True
+    return False
+
+
+async def _analyze_placeholders_for_ai(
+    user_id: str,
+    templates: list[tuple[str, str]],
+) -> dict:
+    """
+    Analyze all placeholders across templates. Returns dict mapping
+    placeholder name -> generation instruction for AI-generateable ones.
+    """
+    all_placeholders = set()
+    for template_type, template_text in templates:
+        placeholders = _extract_all_placeholders(template_text)
+        all_placeholders.update(placeholders)
+
+    # Separate lead-data placeholders from AI-generateable ones
+    lead_data_placeholders = []
+    ai_generate_placeholders = []
+    for ph in all_placeholders:
+        if _is_lead_field_placeholder(ph):
+            lead_data_placeholders.append(ph)
+        else:
+            ai_generate_placeholders.append(ph)
+
+    if not ai_generate_placeholders:
+        return {}
+
+    # Use LLM to generate definitions for AI-generateable placeholders
+    from app.services.llm_manager import LLMManager
+
+    templates_text = "\n".join([f"[{ttype}]: {ttext[:500]}" for ttype, ttext in templates])
+
+    system_msg = f"""You are an AI assistant analyzing email templates for an outreach campaign.
+
+Given the following email templates, analyze each placeholder (in [brackets] or {{{{double_braces}}}}) that CANNOT be replaced from lead data.
+
+PLACEHOLDERS THAT CAN BE REPLACED FROM LEAD DATA (skip these):
+{json.dumps(lead_data_placeholders, indent=2)}
+
+PLACEHOLDERS THAT NEED AI GENERATION (analyze these):
+{json.dumps(ai_generate_placeholders, indent=2)}
+
+EMAIL TEMPLATES:
+{templates_text}
+
+For each AI-generateable placeholder, generate a concise instruction describing what value to generate.
+Consider:
+- The context of the email (what comes before/after the placeholder)
+- The overall email purpose (investor outreach, sales, etc.)
+- What information would make this placeholder contextually appropriate
+
+Return ONLY a JSON dict mapping placeholder name -> generation instruction.
+Example: {{"Portfolio Company": "Generate a relevant portfolio company name that a VC firm with this investor's focus would have invested in"}}
+
+Return valid JSON only. No explanation."""
+
+    try:
+        result = await LLMManager.execute(
+            task_type="email_personalization",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": "Analyze the placeholders and return the JSON definitions."},
+            ],
+            user_id=user_id,
+            temperature=0.3,
+        )
+
+        content = result.get("content", "{}")
+        json_match = re.search(r"\{[^{}]+\}", content, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+    except Exception as exc:
+        logger.warning("Placeholder analysis failed: %s", exc)
+
+    return {}
+
+
 async def _generate_ai_outreach_message(user_id: str, lead: dict) -> str:
     from app.config.groq_config import get_groq_client
     from app.config.settings import settings
@@ -268,6 +395,31 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                     {"$set": {"attachments": attachments}}
                 )
                 campaign["attachments"] = attachments
+
+            # Auto-analyze templates and generate AI placeholder definitions
+            try:
+                all_templates = []
+                if campaign_data.subject_template:
+                    all_templates.append(("subject", campaign_data.subject_template))
+                if campaign_data.body_template:
+                    all_templates.append(("body", campaign_data.body_template))
+                for step in (raw_steps or []):
+                    if isinstance(step, dict):
+                        if step.get("subject_template"):
+                            all_templates.append(("sequence_subject", step["subject_template"]))
+                        if step.get("body_template"):
+                            all_templates.append(("sequence_body", step["body_template"]))
+
+                if all_templates:
+                    ai_defs = await _analyze_placeholders_for_ai(user_id, all_templates)
+                    if ai_defs:
+                        await db.campaigns.update_one(
+                            {"id": campaign["id"]},
+                            {"$set": {"ai_placeholder_definitions": ai_defs, "updated_at": datetime.now(timezone.utc)}}
+                        )
+                        campaign["ai_placeholder_definitions"] = ai_defs
+            except Exception as analyze_err:
+                logger.warning("AI placeholder analysis skipped for campaign %s: %s", campaign["id"], analyze_err)
 
             return json.dumps({"status": "success", "campaign": campaign}, default=str)
 
@@ -1023,6 +1175,13 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
                 return json.dumps({"error": "file_url is required"})
 
             try:
+                # Convert Google Sheet URLs to direct CSV export links
+                if "docs.google.com/spreadsheets" in file_url:
+                    import re as _re
+                    _sheet_match = _re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", file_url)
+                    if _sheet_match:
+                        file_url = f"https://docs.google.com/spreadsheets/d/{_sheet_match.group(1)}/export?format=csv"
+
                 file_content = None
                 filename = file_url.split("/")[-1]
 
@@ -2747,6 +2906,30 @@ async def _generate_conversational_response(
     system_prompt = """You are "Elly", a friendly and helpful AI assistant for the AI Outreach Platform.
 You are conversational, professional, and warm. You help users with their outreach campaigns but also engage in natural friendly conversation.
 Keep responses concise, friendly, and personable. Do NOT use emojis.
+
+COMPANY CONTEXT:
+You operate on behalf of ElectraWireless Company (https://www.electrawireless.co/), founded and owned by Shivam Rajput (Founder / CEO).
+ElectraWireless Company Details:
+- **Core Industry**: Next-Gen Wireless Power & AI Ecosystem.
+- **Mission**: Safe, intelligent wireless power solutions for homes, mobility (EV), and industry. Accelerating a cleaner, cable-free energy future through magnetic resonance and smart-grid integration.
+- **Key Leadership Team**:
+  - Shivam Rajput (Founder / CEO): Visionary behind ElectraWireless.
+  - Luis Carvajal (Mentor / Executive): Sustainability Operations Specialist & Venture Architect at Siemens Energy.
+  - Ludo Loyens (Advisor / European Division Head): CEO of Wingadium - Energy Hydrogen Wind Turbine Company.
+  - Sujay D (Applied AI Engineer): Computer Vision and Multimodal Intelligence.
+- **Key Products**:
+  - Home Wireless Power: Workspace and kitchen wireless power solutions (e.g. workspace charging).
+  - Mobility & EV Charging: High-power wireless charging systems (e.g., 22 kW EV wireless charging, dynamic charging).
+  - Industrial Power: Dynamic and static wireless power delivery for Robotics & AGVs.
+  - IoT & Smart Grid Infrastructure: Smart load balancing and power management.
+- **Key Core Technologies**:
+  - Resonant Coupling: Frequency-locked coil pairs maximizing coupling coefficient in real-time with zero-contact transfer up to 250 mm.
+  - Adaptive Resonance Tuning: Coils auto-tune within microseconds using DSP-driven PLL circuits.
+  - Litz Wire Coil Arrays: Custom multi-strand Litz wire to minimize AC resistance, boosting power density by up to 31%.
+  - AI Load Prediction: On-device ML models forecast power demand 200 ms ahead to optimize field strength, eliminating lag/overshoot.
+  - Smart Load Balancing, EMF Shielding, Over-Temp Protection.
+
+You have deep knowledge of ElectraWireless, its mission, its team, its products, and its technologies. If the user asks about the company, its background, its team, or its products, you must respond with detailed and accurate information from this context.
 If the user asks about platform capabilities, you can briefly mention what you can help with (creating campaigns, managing leads, sending emails, etc.) but don't give long lists unless asked."""
     
     history = conversation_history or []
@@ -2784,6 +2967,13 @@ async def handle_chatbot_chat(
     Args:
         uploaded_files: List of file dicts with 'name', 'url', 'type' keys
     """
+    # ponytail: LPDoS protection - check message length limit
+    if message and len(message) > 4000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Message exceeds maximum allowed length of 4000 characters."
+        )
+
     # Store uploaded files for use in tool execution
     _current_uploaded_files = uploaded_files or []
     
@@ -2855,6 +3045,30 @@ async def handle_chatbot_chat(
     history = conversation_history or []
     planner_system_prompt = """You are the Lead Planning AI for the AI Outreach Platform.
 Your job is to analyze the user's prompt and generate a single structured Execution Plan in JSON format.
+
+COMPANY CONTEXT (ElectraWireless):
+This outreach platform runs on behalf of ElectraWireless Company (https://www.electrawireless.co/), founded and owned by Shivam Rajput (Founder / CEO).
+ElectraWireless Description:
+- **Core Industry**: Next-Gen Wireless Power & AI Ecosystem.
+- **Mission**: Safe, intelligent wireless power solutions for homes, mobility (EV), and industry. Accelerating a cleaner, cable-free energy future through magnetic resonance and smart-grid integration.
+- **Key Leadership Team**:
+  - Shivam Rajput (Founder / CEO): Visionary behind ElectraWireless.
+  - Luis Carvajal (Mentor / Executive): Sustainability Operations Specialist & Venture Architect at Siemens Energy.
+  - Ludo Loyens (Advisor / European Division Head): CEO of Wingadium - Energy Hydrogen Wind Turbine Company.
+  - Sujay D (Applied AI Engineer): Computer Vision and Multimodal Intelligence.
+- **Key Products**:
+  - Home Wireless Power: Workspace and kitchen wireless power solutions (e.g. workspace charging).
+  - Mobility & EV Charging: High-power wireless charging systems (e.g., 22 kW EV wireless charging, dynamic charging).
+  - Industrial Power: Dynamic and static wireless power delivery for Robotics & AGVs.
+  - IoT & Smart Grid Infrastructure: Smart load balancing and power management.
+- **Key Core Technologies**:
+  - Resonant Coupling: Frequency-locked coil pairs maximizing coupling coefficient in real-time with zero-contact transfer up to 250 mm.
+  - Adaptive Resonance Tuning: Coils auto-tune within microseconds using DSP-driven PLL circuits.
+  - Litz Wire Coil Arrays: Custom multi-strand Litz wire to minimize AC resistance, boosting power density by up to 31%.
+  - AI Load Prediction: On-device ML models forecast power demand 200 ms ahead to optimize field strength, eliminating lag/overshoot.
+  - Smart Grid Integration, EMF Shielding, Over-Temp Protection.
+
+All campaigns, templates, sequences, and lead outreach actions generated by the platform are on behalf of ElectraWireless and its CEO Shivam Rajput.
 
 You have access to the following Workers/Tools:
 1. "create_campaign": Creates a new campaign. Arguments: {name: str, description: Optional[str], subject_template: Optional[str], body_template: Optional[str], sequence_steps: Optional[list[dict]]}

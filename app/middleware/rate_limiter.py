@@ -71,6 +71,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     (which need to respond quickly without auth).
     """
 
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
         if path in ("/health", "/docs", "/redoc", "/openapi.json") or path.startswith(

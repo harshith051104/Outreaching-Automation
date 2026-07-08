@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getCampaign, getCampaignStats, startCampaign, pauseCampaign, deleteCampaign, updateCampaign } from "@/services/campaign-api";
+import { getCampaign, getCampaignStats, startCampaign, pauseCampaign, deleteCampaign, updateCampaign, clearAICache } from "@/services/campaign-api";
 import { getGmailAccounts } from "@/services/gmail-api";
 import { getLeads } from "@/services/lead-api";
 import { getFollowups, executeFollowup, cancelFollowup } from "@/services/followup-api";
@@ -33,6 +33,7 @@ export default function CampaignDetailPage() {
   const [subjectTemplate, setSubjectTemplate] = useState("");
   const [bodyTemplate, setBodyTemplate] = useState("");
   const [followups, setFollowups] = useState<FollowupTask[]>([]);
+  const [regenerating, setRegenerating] = useState(false);
 
   const selectedLead = useMemo(
     () => leads.find((l) => l.id === selectedLeadId) || null,
@@ -87,6 +88,20 @@ export default function CampaignDetailPage() {
     } catch (err) {
       console.error("Failed to delete campaign:", err);
       setActionLoading(false);
+    }
+  };
+
+  const handleRegenerateAI = async () => {
+    if (!selectedLeadId || !selectedLead) return;
+    setRegenerating(true);
+    try {
+      await clearAICache(campaignId, selectedLeadId);
+      alert("AI cache cleared. The next email send for this lead will regenerate fresh AI values.");
+    } catch (err) {
+      console.error("Failed to clear AI cache:", err);
+      alert("Failed to clear AI cache.");
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -636,6 +651,15 @@ export default function CampaignDetailPage() {
                       </option>
                     ))}
                   </select>
+                  {selectedLeadId && (
+                    <button
+                      onClick={handleRegenerateAI}
+                      disabled={regenerating}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-lg transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {regenerating ? "Clearing..." : "Regenerate AI"}
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center gap-2">

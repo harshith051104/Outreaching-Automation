@@ -121,3 +121,20 @@ def reset_fernet_cache() -> None:
     """Reset the cached Fernet instance (used in tests)."""
     global _fernet_instance
     _fernet_instance = None
+
+
+def sanitize_nosql(data: Any) -> Any:
+    """
+    Recursively remove/sanitize keys starting with '$' to prevent MongoDB operator injection.
+    ponytail: Simple recursive dict filter.
+    """
+    from typing import Any as AnyType
+    if isinstance(data, dict):
+        return {
+            k: sanitize_nosql(v)
+            for k, v in data.items()
+            if not str(k).startswith("$")
+        }
+    elif isinstance(data, list):
+        return [sanitize_nosql(v) for v in data]
+    return data

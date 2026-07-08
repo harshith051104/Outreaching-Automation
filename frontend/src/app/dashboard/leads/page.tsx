@@ -32,6 +32,8 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCampaignFilterId, setSelectedCampaignFilterId] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const leadsPerPage = 20;
 
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
@@ -46,13 +48,25 @@ export default function LeadsPage() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvError, setCsvError] = useState("");
   const [csvSuccess, setCsvSuccess] = useState("");
+  const [importMethod, setImportMethod] = useState<"file" | "url">("file");
+  const [googleSheetUrl, setGoogleSheetUrl] = useState("");
   const [leadForm, setLeadForm] = useState({ first_name: "", last_name: "", email: "", company: "", title: "", website: "", focus: "" });
   const [leadError, setLeadError] = useState("");
-  const [editForm, setEditForm] = useState({ name: "", email: "", company: "", role: "", website: "", status: "", focus: "" });
+  const [editForm, setEditForm] = useState<{
+    name: string;
+    email: string;
+    company: string;
+    role: string;
+    website: string;
+    status: string;
+    focus: string;
+    custom_fields?: Record<string, any>;
+  }>({ name: "", email: "", company: "", role: "", website: "", status: "", focus: "", custom_fields: {} });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     loadLeads(selectedCampaignFilterId);
+    setCurrentPage(1);
   }, [selectedCampaignFilterId]);
 
   useEffect(() => {
@@ -74,14 +88,23 @@ export default function LeadsPage() {
 
   const handleCsvUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCampaignId || !csvFile) { setCsvError("Please select a campaign and choose a CSV file."); return; }
+    if (!selectedCampaignId) { setCsvError("Please select a campaign."); return; }
     setCsvError(""); setCsvSuccess("");
     try {
-      const res = await uploadLeadCsv(selectedCampaignId, csvFile);
-      setCsvSuccess(`Successfully imported ${res.imported} leads! (Skipped: ${res.skipped})`);
-      setCsvFile(null); loadLeads();
+      if (importMethod === "file") {
+        if (!csvFile) { setCsvError("Please select a CSV file."); return; }
+        const res = await uploadLeadCsv(selectedCampaignId, csvFile);
+        setCsvSuccess(`Successfully imported ${res.imported} leads! (Skipped: ${res.skipped})`);
+        setCsvFile(null);
+      } else {
+        if (!googleSheetUrl.trim()) { setCsvError("Please paste a Google Sheets URL."); return; }
+        const res = await api.post("/leads/import-google-sheet", { campaign_id: selectedCampaignId, url: googleSheetUrl });
+        setCsvSuccess(`Successfully imported ${res.data.imported} leads! (Skipped: ${res.data.skipped})`);
+        setGoogleSheetUrl("");
+      }
+      loadLeads(selectedCampaignFilterId);
       setTimeout(() => { setIsCsvModalOpen(false); setCsvSuccess(""); }, 2000);
-    } catch (err: any) { setCsvError(extractErrorMessage(err, "Failed to upload CSV.")); }
+    } catch (err: any) { setCsvError(extractErrorMessage(err, "Failed to import leads.")); }
   };
 
   const handleCreateLead = async (e: React.FormEvent) => {
@@ -104,7 +127,16 @@ export default function LeadsPage() {
 
   const openEditModal = (lead: any) => {
     setEditLead(lead);
-    setEditForm({ name: lead.name || "", email: lead.email || "", company: lead.company || "", role: lead.role || "", focus: lead.focus || "", website: lead.website || "", status: lead.status || "new" });
+    setEditForm({
+      name: lead.name || "",
+      email: lead.email || "",
+      company: lead.company || "",
+      role: lead.role || "",
+      focus: lead.focus || "",
+      website: lead.website || "",
+      status: lead.status || "new",
+      custom_fields: lead.custom_fields || {}
+    });
   };
 
   const handleSaveEdit = async () => {
@@ -137,6 +169,12 @@ export default function LeadsPage() {
     (l.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
     (l.company || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const totalPages = Math.ceil(filteredLeads.length / leadsPerPage);
+  const activePage = Math.min(currentPage, Math.max(1, totalPages));
+  const indexOfLastLead = activePage * leadsPerPage;
+  const indexOfFirstLead = indexOfLastLead - leadsPerPage;
+  const currentLeads = filteredLeads.slice(indexOfFirstLead, indexOfLastLead);
 
   const cardStyle: React.CSSProperties = {
     background: 'var(--card-bg)', border: '1px solid var(--card-border)',
@@ -208,7 +246,7 @@ export default function LeadsPage() {
               type="text"
               placeholder="Search leads..."
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               style={{ ...inputStyle, width: '220px', paddingLeft: '32px' }}
             />
           </div>
@@ -232,7 +270,7 @@ export default function LeadsPage() {
             color: 'var(--foreground-color)', fontSize: '13px', fontWeight: '600', cursor: 'pointer',
             boxShadow: 'var(--card-shadow)',
           }}>
-            <Upload size={14} /> Import CSV
+            <Upload size={14} /> Import Leads
           </button>
           <button onClick={() => setIsLeadModalOpen(true)} style={{
             display: 'flex', alignItems: 'center', gap: '7px',
@@ -259,151 +297,207 @@ export default function LeadsPage() {
           <p style={{ fontSize: '13px', color: 'var(--sidebar-text-muted)', margin: 0 }}>Import leads via CSV or add them manually.</p>
         </div>
       ) : (
-        <div style={{ ...cardStyle, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--card-border)' }}>
-                  {['Name', 'Email', 'Company', 'Job Title', 'Focus', 'Status', 'Score', 'Quality'].map((h) => (
-                    <th key={h} style={{
-                      padding: '12px 16px', textAlign: 'left',
+        <div>
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--card-border)' }}>
+                    {['Name', 'Email', 'Company', 'Job Title', 'Focus', 'Status', 'Score', 'Quality'].map((h) => (
+                      <th key={h} style={{
+                        padding: '12px 16px', textAlign: 'left',
+                        fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
+                        textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {h}
+                      </th>
+                    ))}
+                    {customFieldKeys.map((k) => (
+                      <th key={k} style={{
+                        padding: '12px 16px', textAlign: 'left',
+                        fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
+                        textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {formatHeader(k)}
+                      </th>
+                    ))}
+                    <th style={{
+                      padding: '12px 16px', textAlign: 'right',
                       fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
                       textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
                       whiteSpace: 'nowrap',
                     }}>
-                      {h}
+                      Actions
                     </th>
-                  ))}
-                  {customFieldKeys.map((k) => (
-                    <th key={k} style={{
-                      padding: '12px 16px', textAlign: 'left',
-                      fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
-                      textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {formatHeader(k)}
-                    </th>
-                  ))}
-                  <th style={{
-                    padding: '12px 16px', textAlign: 'right',
-                    fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em',
-                    textTransform: 'uppercase', color: 'var(--sidebar-text-muted)',
-                    whiteSpace: 'nowrap',
-                  }}>
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLeads.map((lead, idx) => {
-                  const statusCfg = STATUS_COLORS[lead.status] || STATUS_COLORS.new;
-                  const quality = lead.lead_quality_score ? getQualityColor(lead.lead_quality_score) : null;
-                  return (
-                    <tr key={lead.id} style={{
-                      borderBottom: idx < filteredLeads.length - 1 ? '1px solid rgba(124,92,255,0.05)' : 'none',
-                      transition: 'background 0.15s ease',
-                    }}
-                    onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'var(--sidebar-hover)'}
-                    onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}
-                    >
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <div style={{
-                            width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
-                            background: 'linear-gradient(135deg, #7c5cff, #a78bfa)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: '12px', fontWeight: '700', color: 'white',
-                          }}>
-                            {(lead.name || lead.email || '?').charAt(0).toUpperCase()}
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentLeads.map((lead, idx) => {
+                    const statusCfg = STATUS_COLORS[lead.status] || STATUS_COLORS.new;
+                    const quality = lead.lead_quality_score ? getQualityColor(lead.lead_quality_score) : null;
+                    return (
+                      <tr key={lead.id} style={{
+                        borderBottom: idx < currentLeads.length - 1 ? '1px solid rgba(124,92,255,0.05)' : 'none',
+                        transition: 'background 0.15s ease',
+                      }}
+                      onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'var(--sidebar-hover)'}
+                      onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}
+                      >
+                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{
+                              width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+                              background: 'linear-gradient(135deg, #7c5cff, #a78bfa)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: '12px', fontWeight: '700', color: 'white',
+                            }}>
+                              {(lead.name || lead.email || '?').charAt(0).toUpperCase()}
+                            </div>
+                            <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--foreground-color)' }}>
+                              {lead.name || '—'}
+                            </span>
                           </div>
-                          <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--foreground-color)' }}>
-                            {lead.name || '—'}
-                          </span>
-                        </div>
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
-                        {lead.email}
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--foreground-color)' }}>
-                        {lead.company || '—'}
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
-                        {lead.role || '—'}
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
-                        {lead.focus || '—'}
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center', gap: '5px',
-                          padding: '3px 10px', borderRadius: '999px',
-                          background: statusCfg.bg, border: `1px solid ${statusCfg.border}`,
-                          color: statusCfg.color, fontSize: '11px', fontWeight: '600',
-                        }}>
-                          {lead.status || 'new'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                        <span style={{
-                          fontSize: '14px', fontWeight: '700',
-                          color: (lead.score ?? 0) >= 80 ? '#10b981' : (lead.score ?? 0) >= 50 ? '#f59e0b' : 'var(--foreground-color)',
-                        }}>
-                          {lead.score ?? 0}
-                        </span>
-                      </td>
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                        {quality ? (
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
+                          {lead.email}
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'normal', wordBreak: 'break-word', minWidth: '130px', maxWidth: '200px', fontSize: '13px', color: 'var(--foreground-color)' }}>
+                          {lead.company || '—'}
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'normal', wordBreak: 'break-word', minWidth: '130px', maxWidth: '200px', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
+                          {lead.role || '—'}
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'normal', wordBreak: 'break-word', minWidth: '180px', maxWidth: '280px', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
+                          {lead.focus || '—'}
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
                           <span style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '4px',
-                            padding: '3px 8px', borderRadius: '999px',
-                            background: quality.bg, border: `1px solid ${quality.border}`,
-                            color: quality.color, fontSize: '11px', fontWeight: '600',
+                            display: 'inline-flex', alignItems: 'center', gap: '5px',
+                            padding: '3px 10px', borderRadius: '999px',
+                            background: statusCfg.bg, border: `1px solid ${statusCfg.border}`,
+                            color: statusCfg.color, fontSize: '11px', fontWeight: '600',
                           }}>
-                            <Star size={10} fill="currentColor" />
-                            {Math.round(lead.lead_quality_score)}
+                            {lead.status || 'new'}
                           </span>
-                        ) : <span style={{ color: 'var(--sidebar-text-muted)', fontSize: '13px' }}>—</span>}
-                      </td>
-                      {customFieldKeys.map((key) => {
-                        const val = lead.custom_fields ? lead.custom_fields[key] : undefined;
-                        return (
-                          <td key={key} style={{ padding: '14px 16px', whiteSpace: 'nowrap', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
-                            {val !== undefined && val !== "" ? String(val) : '—'}
-                          </td>
-                        );
-                      })}
-                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                          <button onClick={() => openLeadIntel(lead)} style={{
-                            padding: '5px 10px', borderRadius: '7px',
-                            background: 'rgba(124,92,255,0.1)', border: '1px solid rgba(124,92,255,0.25)',
-                            color: '#7c5cff', fontSize: '11px', fontWeight: '600', cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', gap: '4px',
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
+                          <span style={{
+                            fontSize: '14px', fontWeight: '700',
+                            color: (lead.score ?? 0) >= 80 ? '#10b981' : (lead.score ?? 0) >= 50 ? '#f59e0b' : 'var(--foreground-color)',
                           }}>
-                            <Zap size={11} /> Intel
-                          </button>
-                          <button onClick={() => openEditModal(lead)} style={{
-                            padding: '5px 10px', borderRadius: '7px',
-                            border: '1px solid var(--card-border)', background: 'var(--sidebar-hover)',
-                            color: 'var(--foreground-color)', fontSize: '11px', fontWeight: '600', cursor: 'pointer',
-                          }}>
-                            Edit
-                          </button>
-                          <button onClick={() => handleDeleteLead(lead.id)} style={{
-                            padding: '5px 10px', borderRadius: '7px',
-                            background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-                            color: '#ef4444', fontSize: '11px', fontWeight: '600', cursor: 'pointer',
-                          }}>
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                            {lead.score ?? 0}
+                          </span>
+                        </td>
+                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
+                          {quality ? (
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '4px',
+                              padding: '3px 8px', borderRadius: '999px',
+                              background: quality.bg, border: `1px solid ${quality.border}`,
+                              color: quality.color, fontSize: '11px', fontWeight: '600',
+                            }}>
+                              <Star size={10} fill="currentColor" />
+                              {Math.round(lead.lead_quality_score)}
+                            </span>
+                          ) : <span style={{ color: 'var(--sidebar-text-muted)', fontSize: '13px' }}>—</span>}
+                        </td>
+                        {customFieldKeys.map((key) => {
+                          const val = lead.custom_fields ? lead.custom_fields[key] : undefined;
+                          return (
+                            <td key={key} style={{ padding: '14px 16px', whiteSpace: 'normal', wordBreak: 'break-word', minWidth: '130px', maxWidth: '200px', fontSize: '13px', color: 'var(--sidebar-text-muted)' }}>
+                              {val !== undefined && val !== "" ? String(val) : '—'}
+                            </td>
+                          );
+                        })}
+                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                            <button onClick={() => openLeadIntel(lead)} style={{
+                              padding: '5px 10px', borderRadius: '7px',
+                              background: 'rgba(124,92,255,0.1)', border: '1px solid rgba(124,92,255,0.25)',
+                              color: '#7c5cff', fontSize: '11px', fontWeight: '600', cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', gap: '4px',
+                            }}>
+                              <Zap size={11} /> Intel
+                            </button>
+                            <button onClick={() => openEditModal(lead)} style={{
+                              padding: '5px 10px', borderRadius: '7px',
+                              border: '1px solid var(--card-border)', background: 'var(--sidebar-hover)',
+                              color: 'var(--foreground-color)', fontSize: '11px', fontWeight: '600', cursor: 'pointer',
+                            }}>
+                              Edit
+                            </button>
+                            <button onClick={() => handleDeleteLead(lead.id)} style={{
+                              padding: '5px 10px', borderRadius: '7px',
+                              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                              color: '#ef4444', fontSize: '11px', fontWeight: '600', cursor: 'pointer',
+                            }}>
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '20px' }}>
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={activePage === 1}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px',
+                  border: '1px solid var(--card-border)', background: 'var(--card-bg)',
+                  color: activePage === 1 ? 'rgba(255,255,255,0.25)' : 'var(--foreground-color)',
+                  fontSize: '13px', fontWeight: '600',
+                  cursor: activePage === 1 ? 'not-allowed' : 'pointer',
+                  opacity: activePage === 1 ? 0.5 : 1, transition: 'all 0.2s ease',
+                }}
+              >
+                Previous
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
+                const isActive = activePage === pageNum;
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    style={{
+                      width: '36px', height: '36px', borderRadius: '8px',
+                      border: isActive ? 'none' : '1px solid var(--card-border)',
+                      background: isActive ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'var(--card-bg)',
+                      color: isActive ? 'white' : 'var(--foreground-color)',
+                      fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                      boxShadow: isActive ? '0 4px 12px rgba(124,92,255,0.3)' : 'none',
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                disabled={activePage === totalPages}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px',
+                  border: '1px solid var(--card-border)', background: 'var(--card-bg)',
+                  color: activePage === totalPages ? 'rgba(255,255,255,0.25)' : 'var(--foreground-color)',
+                  fontSize: '13px', fontWeight: '600',
+                  cursor: activePage === totalPages ? 'not-allowed' : 'pointer',
+                  opacity: activePage === totalPages ? 0.5 : 1, transition: 'all 0.2s ease',
+                }}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -412,7 +506,7 @@ export default function LeadsPage() {
         <div style={overlayStyle}>
           <div style={modalStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--foreground-color)', margin: 0 }}>Import via CSV</h2>
+              <h2 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--foreground-color)', margin: 0 }}>Import Leads</h2>
               <button onClick={() => setIsCsvModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--sidebar-text-muted)' }}>
                 <X size={20} />
               </button>
@@ -427,13 +521,56 @@ export default function LeadsPage() {
                   {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
+
+              {/* Segmented control to choose import method */}
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '6px' }}>CSV File *</label>
-                <input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] || null)} style={{ fontSize: '13px', color: 'var(--foreground-color)' }} required />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '6px' }}>Import Method *</label>
+                <div style={{ display: 'flex', gap: '8px', background: 'var(--sidebar-toggle-bg)', padding: '4px', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setImportMethod("file")}
+                    style={{
+                      flex: 1, padding: '6px 12px', borderRadius: '6px', border: 'none',
+                      background: importMethod === "file" ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'transparent',
+                      color: importMethod === "file" ? 'white' : 'var(--foreground-color)',
+                      fontSize: '12px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s'
+                    }}
+                  >
+                    File Upload
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImportMethod("url")}
+                    style={{
+                      flex: 1, padding: '6px 12px', borderRadius: '6px', border: 'none',
+                      background: importMethod === "url" ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'transparent',
+                      color: importMethod === "url" ? 'white' : 'var(--foreground-color)',
+                      fontSize: '12px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s'
+                    }}
+                  >
+                    Google Sheet Link
+                  </button>
+                </div>
               </div>
+
+              {importMethod === "file" ? (
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '6px' }}>Leads File (CSV, Excel, or PDF) *</label>
+                  <input type="file" accept=".csv, .xlsx, .xls, .pdf" onChange={e => setCsvFile(e.target.files?.[0] || null)} style={{ fontSize: '13px', color: 'var(--foreground-color)' }} required={importMethod === "file"} />
+                </div>
+              ) : (
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '6px' }}>Google Sheets URL *</label>
+                  <input type="url" placeholder="https://docs.google.com/spreadsheets/d/.../edit?usp=sharing" value={googleSheetUrl} onChange={e => setGoogleSheetUrl(e.target.value)} style={inputStyle} required={importMethod === "url"} />
+                  <p style={{ fontSize: '10px', color: 'var(--sidebar-text-muted)', marginTop: '4px' }}>Ensure the Google Sheet is shared with "Anyone with the link can view".</p>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', paddingTop: '4px' }}>
                 <button type="button" onClick={() => setIsCsvModalOpen(false)} style={{ padding: '9px 18px', borderRadius: '9px', border: '1px solid var(--card-border)', background: 'var(--sidebar-hover)', color: 'var(--foreground-color)', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
-                <button type="submit" style={{ padding: '9px 18px', borderRadius: '9px', border: 'none', background: 'linear-gradient(135deg, #7c5cff, #6344d9)', color: 'white', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>Upload CSV</button>
+                <button type="submit" style={{ padding: '9px 18px', borderRadius: '9px', border: 'none', background: 'linear-gradient(135deg, #7c5cff, #6344d9)', color: 'white', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+                  {importMethod === "file" ? "Upload File" : "Import Google Sheet"}
+                </button>
               </div>
             </form>
           </div>
@@ -504,8 +641,20 @@ export default function LeadsPage() {
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '5px' }}>
                     {field === 'role' ? 'Job Title' : field.charAt(0).toUpperCase() + field.slice(1)}
                   </label>
-                  <input type={field === 'email' ? 'email' : 'text'} value={editForm[field as keyof typeof editForm]}
+                  <input type={field === 'email' ? 'email' : 'text'} value={(editForm as any)[field] || ""}
                     onChange={e => setEditForm({ ...editForm, [field]: e.target.value })} style={inputStyle} />
+                </div>
+              ))}
+              {editForm.custom_fields && Object.keys(editForm.custom_fields).map(field => (
+                <div key={field}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '5px' }}>
+                    {formatHeader(field)}
+                  </label>
+                  <input type="text" value={editForm.custom_fields?.[field] || ""}
+                    onChange={e => {
+                      const updatedCustom = { ...(editForm.custom_fields || {}), [field]: e.target.value };
+                      setEditForm({ ...editForm, custom_fields: updatedCustom });
+                    }} style={inputStyle} />
                 </div>
               ))}
               <div>

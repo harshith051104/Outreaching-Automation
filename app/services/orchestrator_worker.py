@@ -215,6 +215,13 @@ class LeadWorker:
             total_rows += len(manual_leads)
 
         if file_url:
+            # Convert Google Sheet URLs to direct CSV export links
+            if "docs.google.com/spreadsheets" in file_url:
+                import re as _re
+                _sheet_match = _re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", file_url)
+                if _sheet_match:
+                    file_url = f"https://docs.google.com/spreadsheets/d/{_sheet_match.group(1)}/export?format=csv"
+
             filename = file_url.split("/")[-1]
             file_content = None
 
@@ -361,7 +368,11 @@ class BatchContentWorker:
         logger.info(f"BatchContentWorker: Generating batch templates for campaign '{campaign_name}'")
         
         system_prompt = """You are an expert copywriter and sales assistant.
-Your task is to generate a comprehensive email outreach campaign in a single response.
+Your task is to generate a comprehensive email outreach campaign in a single response on behalf of ElectraWireless.
+
+COMPANY PROFILE (ElectraWireless):
+ElectraWireless is founded and owned by Shivam Rajput (Founder / CEO). Shivam Rajput will be the sender for this campaign.
+Key Technologies: Magnetic Resonance Coupling, Adaptive Resonance Tuning, Litz Wire Coil Arrays, and AI Load Prediction.
 
 You MUST generate:
 1. An initial outreach email subject line.
@@ -403,14 +414,22 @@ Return your response strictly as a JSON object matching this structure:
 }
 """
 
+        # Supply ElectraWireless defaults if args are empty or omitted
+        co_desc = args.get("description", "").strip() or "ElectraWireless is a pioneer in next-gen wireless power solutions, accelerating the cable-free energy future through magnetic resonance and smart-grid integration."
+        co_vision = args.get("vision", "").strip() or "Safe, intelligent wireless power solutions for homes, mobility, and industry. Accelerating the cable-free energy future."
+        co_products = args.get("products", "").strip() or "Home Wireless Power (workspace charging), EV Wireless Charging (22 kW EV wireless charging, dynamic charging), Industrial Power (Robotics & AGVs wireless power), IoT & Smart Grid Infrastructure (smart load balancing, adaptive tuning, Litz wire arrays, AI load prediction)."
+        co_opportunity = args.get("opportunity", "").strip() or "Transition to clean, cable-free energy infrastructure across workspace, residential, EV mobility, and industrial automation."
+        co_impact = args.get("impact", "").strip() or "Accelerates electrification, eliminates cable clutter and waste, improves industrial safety/automation, and optimizes grid load balancing."
+        co_cta = args.get("cta", "").strip() or "a quick 10-minute call"
+
         user_content = f"""Generate campaign content for:
 Campaign Name: {campaign_name}
-Description: {args.get("description", "")}
-Vision/Mission: {args.get("vision", "")}
-Products: {args.get("products", "")}
-Market Opportunity: {args.get("opportunity", "")}
-Investment Expected Impact: {args.get("impact", "")}
-Call To Action: {args.get("cta", "a quick call")}
+Description: {co_desc}
+Vision/Mission: {co_vision}
+Products: {co_products}
+Market Opportunity: {co_opportunity}
+Investment Expected Impact: {co_impact}
+Call To Action: {co_cta}
 """
 
         messages = [
