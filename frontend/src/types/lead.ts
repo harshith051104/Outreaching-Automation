@@ -12,6 +12,7 @@ export interface Lead {
   focus?: string;
   status: string;
   score: number;
+  lead_quality_score?: number;
   custom_fields?: Record<string, any>;
   research_data: Record<string, unknown>;
   personalization_data: Record<string, unknown>;
