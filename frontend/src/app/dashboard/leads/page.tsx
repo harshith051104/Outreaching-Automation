@@ -9,7 +9,8 @@ import {
   uploadLeadCsv,
   getLeadSignals,
   getLeadOpportunity,
-  evaluateLeadOpportunity 
+  evaluateLeadOpportunity,
+  importGoogleSheet
 } from "@/services/lead-api";
 import { getCampaigns } from "@/services/campaign-api";
 import { extractErrorMessage } from "@/utils/error";
@@ -98,8 +99,8 @@ export default function LeadsPage() {
         setCsvFile(null);
       } else {
         if (!googleSheetUrl.trim()) { setCsvError("Please paste a Google Sheets URL."); return; }
-        const res = await api.post("/leads/import-google-sheet", { campaign_id: selectedCampaignId, url: googleSheetUrl });
-        setCsvSuccess(`Successfully imported ${res.data.imported} leads! (Skipped: ${res.data.skipped})`);
+        const res = await importGoogleSheet(selectedCampaignId, googleSheetUrl);
+        setCsvSuccess(`Successfully imported ${res.imported} leads! (Skipped: ${res.skipped})`);
         setGoogleSheetUrl("");
       }
       loadLeads(selectedCampaignFilterId);

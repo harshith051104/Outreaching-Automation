@@ -57,3 +57,11 @@ export const getLeadOpportunity = async (leadId: string): Promise<{ status: stri
   const response = await api.get<{ status: string; opportunity: any }>(`/signals/opportunity/lead/${leadId}`);
   return response.data;
 };
+
+export const importGoogleSheet = async (campaignId: string, url: string): Promise<{ imported: number; skipped: number; errors: string[] }> => {
+  const response = await api.post<{ imported: number; skipped: number; errors: string[] }>("/leads/import-google-sheet", {
+    campaign_id: campaignId,
+    url
+  });
+  return response.data;
+};
