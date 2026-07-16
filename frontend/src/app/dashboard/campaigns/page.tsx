@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getCampaigns, startCampaign, pauseCampaign, deleteCampaign, updateCampaign } from "@/services/campaign-api";
 import Link from "next/link";
 import { Play, Pause, RotateCcw, Pencil, Eye, Trash2, Plus, Megaphone, Mail, Users } from "lucide-react";
+import RichTextEditor from "@/components/ui/RichTextEditor";
 
 interface Campaign {
   id: string;
@@ -496,13 +497,22 @@ export default function CampaignsPage() {
                     {field.label}
                   </label>
                   {field.type === 'textarea' ? (
-                    <textarea
-                      value={editForm[field.key as keyof typeof editForm] as string}
-                      onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
-                      placeholder={field.placeholder}
-                      rows={field.key === 'body_template' ? 4 : 2}
-                      style={{ ...inputStyle, resize: 'vertical' }}
-                    />
+                    field.key === 'body_template' ? (
+                      <RichTextEditor
+                        value={editForm[field.key as keyof typeof editForm] as string}
+                        onChange={(value) => setEditForm({ ...editForm, [field.key]: value })}
+                        placeholder={field.placeholder}
+                        className="w-full"
+                      />
+                    ) : (
+                      <textarea
+                        value={editForm[field.key as keyof typeof editForm] as string}
+                        onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
+                        placeholder={field.placeholder}
+                        rows={2}
+                        style={{ ...inputStyle, resize: 'vertical' }}
+                      />
+                    )
                   ) : (
                     <input
                       type={field.type}

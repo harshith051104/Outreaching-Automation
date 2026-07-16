@@ -7,6 +7,7 @@ import { getGmailAccounts } from "@/services/gmail-api";
 import { extractErrorMessage } from "@/utils/error";
 import type { GmailAccount } from "@/types/gmail";
 import Link from "next/link";
+import RichTextEditor from "@/components/ui/RichTextEditor";
 
 export default function NewCampaignPage() {
   const router = useRouter();
@@ -121,12 +122,11 @@ export default function NewCampaignPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700">Email Body Template</label>
-            <textarea
+            <RichTextEditor
               value={form.body_template}
-              onChange={(e) => setForm({ ...form, body_template: e.target.value })}
-              rows={6}
+              onChange={(value) => setForm({ ...form, body_template: value })}
               placeholder="AI will generate personalized emails based on this template..."
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none"
+              className="mt-1"
             />
           </div>
 

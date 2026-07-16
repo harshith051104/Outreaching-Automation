@@ -11,6 +11,7 @@ import type { Lead } from "@/types/lead";
 import Link from "next/link";
 import { useAuthStore } from "@/store/auth-store";
 import { Play, Pause, Trash2 } from "lucide-react";
+import RichTextEditor from "@/components/ui/RichTextEditor";
 
 export default function CampaignDetailPage() {
   const params = useParams();
@@ -543,18 +544,17 @@ export default function CampaignDetailPage() {
                         </div>
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Body Template</label>
-                          <textarea
+                          <RichTextEditor
                             value={step.body_template || ""}
-                            onChange={(e) => {
+                            onChange={(value) => {
                               setSequenceSteps(prev => {
                                 const next = [...prev];
-                                next[idx] = { ...next[idx], body_template: e.target.value };
+                                next[idx] = { ...next[idx], body_template: value };
                                 return next;
                               });
                             }}
-                            rows={3}
                             placeholder="Hi {{first_name}},\n\nFollowing up on my last email."
-                            className="w-full rounded border border-gray-300 p-2 text-xs bg-white text-gray-800 focus:outline-none font-mono"
+                            className="w-full mt-1"
                           />
                         </div>
                       </div>
@@ -716,12 +716,11 @@ export default function CampaignDetailPage() {
                 <hr className="border-gray-200/50" />
                 <div>
                   <label className="text-xs font-bold text-gray-400 mb-1 block uppercase tracking-wider">Body Template</label>
-                  <textarea
+                  <RichTextEditor
                     value={bodyTemplate}
-                    onChange={(e) => setBodyTemplate(e.target.value)}
-                    rows={8}
-                    className="w-full rounded border border-gray-300 p-3 text-sm bg-white text-gray-800 focus:border-violet-500 focus:outline-none font-sans"
+                    onChange={(value) => setBodyTemplate(value)}
                     placeholder="No template set"
+                    className="w-full mt-1"
                   />
                 </div>
                 {campaign.attachments && campaign.attachments.length > 0 && (
