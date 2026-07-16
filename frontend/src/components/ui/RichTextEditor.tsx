@@ -94,12 +94,12 @@ export default function RichTextEditor({
         onInput={handleInput}
         onBlur={handleInput}
         className="rich-text-editor-content p-3 min-h-[150px] outline-none text-sm text-gray-800 font-sans break-words overflow-y-auto"
-        placeholder={placeholder}
+        data-placeholder={placeholder}
       />
 
       <style dangerouslySetInnerHTML={{ __html: `
         .rich-text-editor-content:empty:before {
-          content: attr(placeholder);
+          content: attr(data-placeholder);
           color: #9ca3af;
           cursor: text;
           display: block;
