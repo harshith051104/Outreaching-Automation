@@ -813,3 +813,9 @@ input:focus, textarea:focus, select:focus {
   background-color: #13102a !important;
   color: #e8e3ff !important;
 }
+
+/* Email preview/editor color override to ensure visibility in light/dark themes */
+.override-email-colors,
+.override-email-colors * {
+  color: var(--gray-800) !important;
+}

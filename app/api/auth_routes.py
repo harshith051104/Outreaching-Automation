@@ -7,8 +7,8 @@ Provides register, login, current-user, and user-listing endpoints.
 from fastapi import APIRouter, Depends, status
 
 from app.auth.dependencies import get_current_user
-from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
-from app.services.auth_service import register_user, login_user
+from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest
+from app.services.auth_service import register_user, login_user, request_password_reset, reset_user_password
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -87,3 +87,25 @@ async def list_users(current_user: dict = Depends(get_current_user)):
     ).sort("name", 1)
     users = await cursor.to_list(length=200)
     return users
+
+
+@router.post(
+    "/forgot-password",
+    summary="Request a password reset code",
+)
+async def forgot_password(data: ForgotPasswordRequest):
+    """
+    Generate a 6-digit verification code and save it.
+    """
+    return await request_password_reset(data)
+
+
+@router.post(
+    "/reset-password",
+    summary="Reset password using verification code",
+)
+async def reset_password(data: ResetPasswordRequest):
+    """
+    Verify reset code and update user password.
+    """
+    return await reset_user_password(data)

@@ -345,7 +345,7 @@ export default function LeadDetailsPage({ params }: PageProps) {
                             {step.subject_template && (
                               <p className="text-[11px] text-slate-500">Subject: {step.subject_template}</p>
                             )}
-                            <div className="text-slate-600 whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: step.body_template || step.notes || "" }} />
+                            <div className="text-slate-600 whitespace-pre-wrap override-email-colors" dangerouslySetInnerHTML={{ __html: step.body_template || step.notes || "" }} />
                           </div>
                         </div>
                       ))

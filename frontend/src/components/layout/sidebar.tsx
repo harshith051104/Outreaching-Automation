@@ -32,7 +32,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { getMonitorStats } from "@/services/monitor-api";
-import { getUnreadNotificationsCount } from "@/services/task-api";
+import { getUnreadNotificationCount } from "@/services/dashboard-api";
 import { useEffect } from "react";
 
 interface NavItem {
@@ -83,7 +83,7 @@ export default function Sidebar() {
       try {
         const [stats, unread] = await Promise.all([
           getMonitorStats().catch(() => ({ pending_drafts: 0 })),
-          getUnreadNotificationsCount().catch(() => 0),
+          getUnreadNotificationCount(user?.id).catch(() => 0),
         ]);
         setPendingRepliesCount(stats.pending_drafts || 0);
         setUnreadNotificationsCount(unread || 0);
@@ -94,7 +94,7 @@ export default function Sidebar() {
     loadStats();
     const interval = setInterval(loadStats, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.id]);
 
   const navGroups: NavGroup[] = [
     {

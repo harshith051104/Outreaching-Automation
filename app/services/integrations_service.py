@@ -214,6 +214,8 @@ async def _run_test(provider: str, creds: dict) -> dict[str, Any]:
         return await _test_nvidia(creds)
     elif provider == "xiaomi":
         return await _test_xiaomi(creds)
+    elif provider == "gemini":
+        return await _test_gemini(creds)
     elif provider == "tavily":
         return await _test_tavily(creds)
     elif provider == "firecrawl":
@@ -256,6 +258,23 @@ async def _test_xiaomi(creds: dict) -> dict:
     if not api_key:
         return {"ok": False, "message": "API key is empty."}
     return {"ok": True, "message": "Xiaomi API key saved."}
+
+
+async def _test_gemini(creds: dict) -> dict:
+    api_key = creds.get("api_key", "")
+    if not api_key:
+        return {"ok": False, "message": "API key is empty."}
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(
+                "https://generativelanguage.googleapis.com/v1beta/openai/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if r.status_code == 200:
+                return {"ok": True, "message": "Gemini connection successful."}
+            return {"ok": False, "message": f"Gemini returned {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Gemini connection failed: {e}"}
 
 
 async def _test_groq(creds: dict) -> dict:
@@ -331,17 +350,7 @@ async def _test_hunter(creds: dict) -> dict:
 
 
 async def _test_linkedin(creds: dict) -> dict:
-    cookie = creds.get("cookie", "")
-    if not cookie:
-        return {"ok": False, "message": "LinkedIn session cookie is empty."}
-    # Just validate JSON parseability; actual Playwright test would require subprocess
-    try:
-        parsed = json.loads(cookie) if isinstance(cookie, str) else cookie
-        if isinstance(parsed, list) and len(parsed) > 0:
-            return {"ok": True, "message": f"LinkedIn session has {len(parsed)} cookies stored."}
-        return {"ok": False, "message": "Cookie JSON is empty or malformed."}
-    except json.JSONDecodeError:
-        return {"ok": False, "message": "Cookie value is not valid JSON."}
+    return {"ok": False, "message": "LinkedIn integration has been removed from the platform."}
 
 
 async def _test_google_sheets(creds: dict) -> dict:

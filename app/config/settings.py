@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     XIAOMI_API_KEY: str = ""
     XIAOMI_MODEL: str = "mimo-v2.5"
 
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemma-4-26b-a4b-it"
+
     APOLLO_API_KEY: str = ""
     HUNTER_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
@@ -59,6 +62,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     RATE_LIMIT_PER_MINUTE: int = 300
     LINKEDIN_HEADLESS: bool = False
+    DISABLE_LOCAL_SCHEDULER: bool = False
 
     model_config = {
         "env_file": ".env",

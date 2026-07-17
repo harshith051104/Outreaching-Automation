@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { getDashboardStats } from "@/services/analytics-api";
 import { getDashboardStats as getTaskDashboardStats, DashboardStats } from "@/services/task-api";
 import { getLeads } from "@/services/lead-api";
+import { getDashboardSummary, getSystemHealth } from "@/services/dashboard-api";
+import type { DashboardSummary, WSEvent } from "@/types/dashboard";
+import { useAuthStore } from "@/store/auth-store";
+import { useWebSocket } from "@/hooks/use-websocket";
 import Link from "next/link";
 import TeamOverviewWidget from "@/components/dashboard/TeamOverviewWidget";
-import { 
-  Users, 
-  CheckCircle, 
-  Megaphone, 
-  Mail, 
-  MessageSquare, 
+import {
+  Users,
+  CheckCircle,
+  Megaphone,
+  Mail,
+  MessageSquare,
   Calendar,
   Sparkles,
   Brain,
@@ -26,16 +30,16 @@ import {
   Activity,
   BarChart2,
 } from "lucide-react";
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  ResponsiveContainer, 
-  PieChart, 
-  Pie, 
-  Cell 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell
 } from "recharts";
 
 const METRIC_CONFIGS: Record<string, { gradient: string; glow: string; icon: string }> = {
@@ -48,10 +52,31 @@ const METRIC_CONFIGS: Record<string, { gradient: string; glow: string; icon: str
 };
 
 export default function DashboardPage() {
+  const { user } = useAuthStore();
   const [stats, setStats] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [taskStats, setTaskStats] = useState<DashboardStats | null>(null);
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [realtimeEvents, setRealtimeEvents] = useState<WSEvent[]>([]);
+
+  const handleWsMessage = useCallback((msg: { type: string; data: Record<string, unknown> }) => {
+    if (msg.type === "pong") return;
+    const evt = msg as unknown as WSEvent;
+    setRealtimeEvents((prev) => [evt, ...prev].slice(0, 20));
+
+    if (evt.event_type?.startsWith("campaign.") || evt.event_type?.startsWith("email.")) {
+      loadData();
+    }
+  }, []);
+
+  const { isConnected } = useWebSocket({
+    userId: user?.id || "",
+    path: "dashboard/ws",
+    subscriptions: "campaign,email,lead,system",
+    enabled: !!user?.id,
+    onMessage: handleWsMessage,
+  });
 
   useEffect(() => {
     loadData();
@@ -60,15 +85,17 @@ export default function DashboardPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [statsData, leadsData, taskStatsData] = await Promise.all([
+      const [statsData, leadsData, taskStatsData, summaryData] = await Promise.all([
         getDashboardStats().catch(() => null),
         getLeads().catch(() => []),
-        getTaskDashboardStats().catch(() => null)
+        getTaskDashboardStats().catch(() => null),
+        getDashboardSummary(user?.id).catch(() => null),
       ]);
 
       setStats(statsData);
       setLeads(leadsData);
       setTaskStats(taskStatsData);
+      setDashboardSummary(summaryData);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
@@ -104,12 +131,12 @@ export default function DashboardPage() {
   const meetingsBooked = leads.filter(l => l.status === "meeting" || l.status === "replied").length;
 
   const topMetrics = [
-    { label: "Total Leads", value: totalLeads || stats?.total_leads || 0, icon: Users, color: "blue", change: "+12%" },
-    { label: "Verified Leads", value: verifiedLeads || Math.round((totalLeads || 0) * 0.7), icon: CheckCircle, color: "emerald", change: "+8%" },
-    { label: "Active Campaigns", value: stats?.active_campaigns ?? 0, icon: Megaphone, color: "purple", change: "Live" },
-    { label: "Emails Sent", value: stats?.total_emails_sent ?? 0, icon: Mail, color: "indigo", change: "Total" },
+    { label: "Total Leads", value: dashboardSummary?.total_leads || totalLeads || stats?.total_leads || 0, icon: Users, color: "blue", change: "+12%" },
+    { label: "Verified Leads", value: verifiedLeads, icon: CheckCircle, color: "emerald", change: "+8%" },
+    { label: "Active Campaigns", value: dashboardSummary?.active_campaigns ?? stats?.active_campaigns ?? 0, icon: Megaphone, color: "purple", change: "Live" },
+    { label: "Emails Sent", value: dashboardSummary?.emails_sent_total ?? stats?.total_emails_sent ?? 0, icon: Mail, color: "indigo", change: dashboardSummary?.emails_sent_today ? `${dashboardSummary.emails_sent_today} today` : "Total" },
     { label: "Reply Rate", value: `${stats?.reply_rate ?? 0}%`, icon: MessageSquare, color: "amber", change: "↑ 3%" },
-    { label: "Meetings Booked", value: meetingsBooked || 0, icon: Calendar, color: "rose", change: "This month" },
+    { label: "Meetings Booked", value: dashboardSummary?.meetings_scheduled || meetingsBooked || 0, icon: Calendar, color: "rose", change: "This month" },
   ];
 
   const topLead = [...leads].sort((a, b) => (b.score || 0) - (a.score || 0))[0];

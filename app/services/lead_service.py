@@ -211,7 +211,23 @@ async def import_leads_csv(
 
         first_name = (row.get("first_name") or "").strip()
         last_name = (row.get("last_name") or "").strip()
-        full_name = f"{first_name} {last_name}".strip() or email
+        
+        # Check for full name fields if first_name is missing
+        full_name = ""
+        full_name_fields = ["name", "full_name", "fullname", "contact_name", "person_name", "investor's_name", "investors_name", "investor_name"]
+        for f in full_name_fields:
+            if f in row and row[f]:
+                full_name = str(row[f]).strip()
+                break
+                
+        if not first_name and full_name:
+            parts = full_name.split(None, 1)
+            first_name = parts[0]
+            if not last_name and len(parts) > 1:
+                last_name = parts[1]
+                
+        if not full_name:
+            full_name = f"{first_name} {last_name}".strip() or email
 
         role = (row.get("title") or row.get("job_title") or "").strip()
         website = (row.get("website") or row.get("url") or "").strip()
@@ -222,7 +238,8 @@ async def import_leads_csv(
 
         standard_keys = {
             "email", "first_name", "last_name", "company", "title", "job_title", 
-            "website", "url", "focus", "phone", "linkedin_url", "linkedin", "industry"
+            "website", "url", "focus", "phone", "linkedin_url", "linkedin", "industry",
+            "name", "full_name", "fullname", "contact_name", "person_name", "investor's_name", "investors_name", "investor_name"
         }
 
         custom_fields = {}

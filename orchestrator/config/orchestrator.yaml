@@ -1,0 +1,20 @@
+runtime:
+  max_parallel_nodes: 8
+  default_timeout: 300
+  retry_policy: exponential
+
+registry:
+  auto_reload: true
+  reload_interval: 5
+
+compiler:
+  validation_level: STRICT
+
+logging:
+  persist: true
+
+events:
+  enabled: true
+
+artifacts:
+  persist: true

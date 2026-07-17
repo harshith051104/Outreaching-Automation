@@ -1,4 +1,4 @@
-"use client";
-export default function Test() {
-  return <div>Test</div>;
+// deprecated: removed from platform
+export default function Page() {
+  return null;
 }

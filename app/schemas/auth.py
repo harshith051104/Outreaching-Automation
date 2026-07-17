@@ -42,3 +42,15 @@ class UserResponse(BaseModel):
 
     class Config:
         extra = "ignore"
+
+
+class ForgotPasswordRequest(BaseModel):
+    """POST /api/auth/forgot-password request body."""
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """POST /api/auth/reset-password request body."""
+    email: EmailStr
+    code: str
+    new_password: str = Field(..., min_length=8, max_length=128)

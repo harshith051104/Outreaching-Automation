@@ -32,6 +32,7 @@ export interface HealthStatus {
 // Provider field definitions for the UI
 export const PROVIDER_FIELDS: Record<string, { key: string; label: string; placeholder: string; isTextarea?: boolean }[]> = {
   groq: [{ key: "api_key", label: "API Key", placeholder: "gsk_..." }],
+  gemini: [{ key: "api_key", label: "API Key", placeholder: "AIzaSy..." }],
   tavily: [{ key: "api_key", label: "API Key", placeholder: "tvly-..." }],
   firecrawl: [{ key: "api_key", label: "API Key", placeholder: "fc-..." }],
   apollo: [{ key: "api_key", label: "API Key", placeholder: "apollo-api-key..." }],
@@ -57,6 +58,7 @@ export const PROVIDER_FIELDS: Record<string, { key: string; label: string; place
 
 export const PROVIDER_ICONS: Record<string, string> = {
   groq: "🤖",
+  gemini: "♊",
   tavily: "🔍",
   firecrawl: "🕷️",
   apollo: "🚀",

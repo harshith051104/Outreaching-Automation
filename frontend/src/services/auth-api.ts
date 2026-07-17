@@ -29,8 +29,20 @@ export const getMe = async (): Promise<User> => {
   return response.data;
 };
 
+export const forgotPassword = async (email: string): Promise<{ message: string; code?: string }> => {
+  const response = await api.post<{ message: string; code?: string }>("/auth/forgot-password", { email });
+  return response.data;
+};
+
+export const resetPassword = async (data: any): Promise<{ message: string }> => {
+  const response = await api.post<{ message: string }>("/auth/reset-password", data);
+  return response.data;
+};
+
 export const authApi = {
   register,
   login,
   getMe,
+  forgotPassword,
+  resetPassword,
 };

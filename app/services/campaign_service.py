@@ -203,14 +203,48 @@ async def update_campaign(campaign_id: str, user_id: str, data: Any) -> Dict:
 
 
 async def delete_campaign(campaign_id: str, user_id: str) -> bool:
-    """Soft-delete a campaign."""
+    """Hard-delete a campaign and ALL associated data (leads, emails, tasks, follow-ups, memories, cache)."""
     db = await get_database()
-    result = await db.campaigns.update_one(
-        {"id": campaign_id, "user_id": user_id},
-        {"$set": {"status": "deleted", "updated_at": datetime.now(timezone.utc)}},
-    )
-    if result.matched_count == 0:
+
+    # Verify ownership before deleting anything
+    campaign = await db.campaigns.find_one({"id": campaign_id, "user_id": user_id})
+    if not campaign:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
+
+    logger.info("Deleting campaign %s and all associated data", campaign_id)
+
+    # 1. Delete all leads belonging to this campaign
+    leads_result = await db.leads.delete_many({"campaign_id": campaign_id})
+    logger.info("Deleted %d leads for campaign %s", leads_result.deleted_count, campaign_id)
+
+    # 2. Delete all emails sent / queued for this campaign
+    await db.emails.delete_many({"campaign_id": campaign_id})
+
+    # 3. Delete all scheduled tasks
+    await db.scheduled_tasks.delete_many({"campaign_id": campaign_id})
+
+    # 4. Delete all follow-up tasks
+    await db.followup_tasks.delete_many({"campaign_id": campaign_id})
+
+    # 5. Delete lead memories linked to this campaign
+    await db.lead_memories.delete_many({"campaign_id": campaign_id})
+
+    # 6. Delete campaign-level memory
+    await db.campaign_memories.delete_many({"campaign_id": campaign_id})
+
+    # 7. Delete AI placeholder cache for this campaign
+    await db.ai_placeholder_cache.delete_many({"cache_key": {"$regex": f"^{campaign_id}:"}})
+
+    # 8. Delete outreach/timeline events
+    await db.outreach.delete_many({"campaign_id": campaign_id})
+
+    # 9. Delete campaign analytics
+    await db.campaign_analytics.delete_many({"campaign_id": campaign_id})
+
+    # 10. Finally delete the campaign document itself
+    await db.campaigns.delete_one({"id": campaign_id, "user_id": user_id})
+
+    logger.info("Campaign %s and all associated data deleted successfully", campaign_id)
     return True
 
 
@@ -247,6 +281,34 @@ async def start_campaign(campaign_id: str, user_id: str) -> Dict:
         {"id": campaign_id},
         {"$set": {"status": "active", "started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
     )
+
+    # Resume all paused scheduled tasks and followup tasks for this campaign
+    now = datetime.now(timezone.utc)
+    paused_tasks = await db.scheduled_tasks.find({"campaign_id": campaign_id, "status": "paused"}).to_list(length=2000)
+    for task in paused_tasks:
+        sched_at = task.get("scheduled_at")
+        if sched_at:
+            if sched_at.tzinfo is None:
+                sched_at = sched_at.replace(tzinfo=timezone.utc)
+            if sched_at < now:
+                sched_at = now
+        await db.scheduled_tasks.update_one(
+            {"id": task["id"]},
+            {"$set": {"status": "pending", "scheduled_at": sched_at, "updated_at": now}}
+        )
+
+    paused_followups = await db.followup_tasks.find({"campaign_id": campaign_id, "status": "paused"}).to_list(length=2000)
+    for f in paused_followups:
+        sched_at = f.get("scheduled_at")
+        if sched_at:
+            if sched_at.tzinfo is None:
+                sched_at = sched_at.replace(tzinfo=timezone.utc)
+            if sched_at < now:
+                sched_at = now
+        await db.followup_tasks.update_one(
+            {"id": f["id"]},
+            {"$set": {"status": "pending", "scheduled_at": sched_at, "updated_at": now}}
+        )
 
     try:
         from app.tasks.campaign_tasks import _execute_campaign_async
@@ -292,6 +354,16 @@ async def pause_campaign(campaign_id: str, user_id: str) -> Dict:
     await db.campaigns.update_one(
         {"id": campaign_id},
         {"$set": {"status": "paused", "updated_at": datetime.now(timezone.utc)}},
+    )
+
+    # Pause all scheduled tasks and followup tasks for this campaign
+    await db.scheduled_tasks.update_many(
+        {"campaign_id": campaign_id, "status": "pending"},
+        {"$set": {"status": "paused", "updated_at": datetime.now(timezone.utc)}}
+    )
+    await db.followup_tasks.update_many(
+        {"campaign_id": campaign_id, "status": "pending"},
+        {"$set": {"status": "paused", "updated_at": datetime.now(timezone.utc)}}
     )
 
     # Notify campaign owner

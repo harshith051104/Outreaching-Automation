@@ -78,10 +78,12 @@ export default function SettingsPage() {
   const [groqKey, setGroqKey] = useState("");
   const [nvidiaKey, setNvidiaKey] = useState("");
   const [xiaomiKey, setXiaomiKey] = useState("");
+  const [geminiKey, setGeminiKey] = useState("");
   const [llmStatus, setLlmStatus] = useState<Record<string, { connected: boolean; error?: string }>>({
     groq: { connected: false },
     nvidia: { connected: false },
     xiaomi: { connected: false },
+    gemini: { connected: false },
   });
   const [showLlmKeys, setShowLlmKeys] = useState<Record<string, boolean>>({});
   const [llmSaveLoading, setLlmSaveLoading] = useState<Record<string, boolean>>({});
@@ -202,9 +204,10 @@ export default function SettingsPage() {
         groq: { connected: false },
         nvidia: { connected: false },
         xiaomi: { connected: false },
+        gemini: { connected: false },
       };
       data.forEach(item => {
-        if (item.provider === "groq" || item.provider === "nvidia" || item.provider === "xiaomi") {
+        if (item.provider === "groq" || item.provider === "nvidia" || item.provider === "xiaomi" || item.provider === "gemini") {
           statusMap[item.provider] = {
             connected: item.connected,
             error: item.last_error || undefined,
@@ -234,15 +237,27 @@ export default function SettingsPage() {
       }
     }
 
-    // Load preferences settings from localStorage
-    const savedPreferences = localStorage.getItem("outreach_settings_preferences");
-    if (savedPreferences) {
+    // Load preferences settings from backend API
+    const loadSystemPreferences = async () => {
       try {
-        setPreferences((prev) => ({ ...prev, ...JSON.parse(savedPreferences) }));
+        const response = await api.get("/system/preferences");
+        if (response.data) {
+          setPreferences((prev) => ({ ...prev, ...response.data }));
+        }
       } catch (err) {
-        console.error("Error loading saved preferences:", err);
+        console.error("Error loading system preferences from backend:", err);
+        // Fallback to localStorage
+        const savedPreferences = localStorage.getItem("outreach_settings_preferences");
+        if (savedPreferences) {
+          try {
+            setPreferences((prev) => ({ ...prev, ...JSON.parse(savedPreferences) }));
+          } catch (e) {
+            console.error("Error parsing localStorage preferences:", e);
+          }
+        }
       }
-    }
+    };
+    loadSystemPreferences();
   }, []);
 
   const loadGmail = async () => {
@@ -294,11 +309,12 @@ export default function SettingsPage() {
     setLlmSaveLoading(prev => ({ ...prev, [provider]: true }));
     try {
       await saveIntegration(provider, { api_key: apiKey.trim() });
-      setAiModelsSuccess(`${provider === "groq" ? "Groq" : provider === "nvidia" ? "Nvidia NIM" : "Xiaomi"} API key updated successfully!`);
+      setAiModelsSuccess(`${provider === "groq" ? "Groq" : provider === "nvidia" ? "Nvidia NIM" : provider === "xiaomi" ? "Xiaomi" : "Google Gemini"} API key updated successfully!`);
       // Clear key input
       if (provider === "groq") setGroqKey("");
       else if (provider === "nvidia") setNvidiaKey("");
       else if (provider === "xiaomi") setXiaomiKey("");
+      else if (provider === "gemini") setGeminiKey("");
       
       await loadLlmStatus();
       setTimeout(() => setAiModelsSuccess(""), 3000);
@@ -310,7 +326,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteLlmKey = async (provider: string) => {
-    const label = provider === "groq" ? "Groq" : provider === "nvidia" ? "Nvidia NIM" : "Xiaomi";
+    const label = provider === "groq" ? "Groq" : provider === "nvidia" ? "Nvidia NIM" : provider === "xiaomi" ? "Xiaomi" : "Google Gemini";
     if (!confirm(`Remove configured key for ${label}?`)) return;
     try {
       await deleteIntegration(provider);
@@ -329,11 +345,20 @@ export default function SettingsPage() {
     setTimeout(() => setApiKeysSuccess(""), 3000);
   };
 
-  const handlePreferencesSave = (e: React.FormEvent) => {
+  const handlePreferencesSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem("outreach_settings_preferences", JSON.stringify(preferences));
-    setPreferencesSuccess("System preferences updated successfully!");
-    setTimeout(() => setPreferencesSuccess(""), 3000);
+    try {
+      await api.post("/system/preferences", preferences);
+      localStorage.setItem("outreach_settings_preferences", JSON.stringify(preferences));
+      setPreferencesSuccess("System preferences updated successfully!");
+    } catch (err) {
+      console.error("Failed to save system preferences to backend:", err);
+      // Still write to localStorage as backup
+      localStorage.setItem("outreach_settings_preferences", JSON.stringify(preferences));
+      setPreferencesSuccess("Preferences saved locally (failed to sync with backend).");
+    } finally {
+      setTimeout(() => setPreferencesSuccess(""), 3000);
+    }
   };
 
   const handleConnectGmail = async () => {
@@ -758,6 +783,64 @@ export default function SettingsPage() {
                       <Button
                         variant="destructive"
                         onClick={() => handleDeleteLlmKey("xiaomi")}
+                        className="bg-rose-500/10 hover:bg-rose-650 border border-rose-500/15 text-rose-450 hover:text-white rounded-xl"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 4. Gemini key */}
+                <div className="border border-white/5 bg-[#0d0d14]/40 p-5 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-white">Google Gemini</h4>
+                      <p className="text-xs text-slate-400 mt-1">Powers advanced Gemma-4 model integrations.</p>
+                    </div>
+                    <div>
+                      {llmStatus.gemini?.connected ? (
+                        <Badge variant="success">✓ Configured</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="opacity-60">Not configured</Badge>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {llmStatus.gemini?.error && (
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400">
+                      ⚠️ Connection Error: {llmStatus.gemini.error}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showLlmKeys.gemini ? "text" : "password"}
+                        placeholder={llmStatus.gemini?.connected ? "••••••••••••••••" : "gemini-api-key..."}
+                        value={geminiKey}
+                        onChange={(e) => setGeminiKey(e.target.value)}
+                        className="bg-[#08080c] border border-white/10 text-white rounded-xl focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmKeys(prev => ({ ...prev, gemini: !prev.gemini }))}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                      >
+                        {showLlmKeys.gemini ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      onClick={() => handleSaveLlmKey("gemini", geminiKey)}
+                      disabled={llmSaveLoading.gemini || !geminiKey.trim()}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl"
+                    >
+                      {llmSaveLoading.gemini ? "Saving..." : "Update"}
+                    </Button>
+                    {llmStatus.gemini?.connected && (
+                      <Button
+                        variant="destructive"
+                        onClick={() => handleDeleteLlmKey("gemini")}
                         className="bg-rose-500/10 hover:bg-rose-650 border border-rose-500/15 text-rose-450 hover:text-white rounded-xl"
                       >
                         Remove

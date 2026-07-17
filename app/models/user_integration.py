@@ -49,11 +49,11 @@ class UserIntegration(BaseModel):
         return cls(**doc)
 
 
-# Canonical provider names and their human-readable labels
 PROVIDER_LABELS: dict[str, str] = {
     "groq": "Groq AI",
     "nvidia": "Nvidia NIM",
     "xiaomi": "Xiaomi",
+    "gemini": "Google Gemini",
     "tavily": "Tavily Search",
     "firecrawl": "Firecrawl",
     "apollo": "Apollo.io",
@@ -68,6 +68,7 @@ PROVIDER_FIELDS: dict[str, list[str]] = {
     "groq": ["api_key"],
     "nvidia": ["api_key"],
     "xiaomi": ["api_key"],
+    "gemini": ["api_key"],
     "tavily": ["api_key"],
     "firecrawl": ["api_key"],
     "apollo": ["api_key"],

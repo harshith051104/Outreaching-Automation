@@ -98,6 +98,22 @@ async def get_dashboard_stats(user_id: str) -> dict:
     total_clicks = event_counts.get("click", 0)
     total_replies = event_counts.get("reply", 0)
 
+    # Compute emails sent today
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    sent_today = await db.emails.count_documents(
+        {
+            "campaign_id": {"$in": campaign_ids},
+            "status": "sent",
+            "sent_at": {"$gte": today_start}
+        }
+    )
+
+    # Get daily limit from system_preferences
+    daily_limit = 50
+    prefs = await db.system_settings.find_one({"user_id": user_id, "type": "system_preferences"})
+    if prefs and "dailyLimit" in prefs:
+        daily_limit = prefs["dailyLimit"]
+
     open_rate = (total_opens / total_emails_sent * 100) if total_emails_sent > 0 else 0.0
     click_rate = (total_clicks / total_emails_sent * 100) if total_emails_sent > 0 else 0.0
     reply_rate = (total_replies / total_emails_sent * 100) if total_emails_sent > 0 else 0.0
@@ -113,6 +129,8 @@ async def get_dashboard_stats(user_id: str) -> dict:
         "open_rate": round(open_rate, 2),
         "click_rate": round(click_rate, 2),
         "reply_rate": round(reply_rate, 2),
+        "sent_today": sent_today,
+        "daily_send_limit": daily_limit,
     }
 
 

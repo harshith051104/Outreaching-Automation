@@ -8,6 +8,12 @@ import logging
 from typing import Any
 from groq import Groq
 from app.config.settings import settings
+from app.services.llm_rate_gate import (
+    LLMRateLimitError,
+    mark_rate_limited,
+    parse_retry_after,
+    wait_out_llm_rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +130,46 @@ def get_groq_client(user_id: str | None = None) -> Groq:
         _user_groq_clients[api_key] = Groq(api_key=api_key)
     return _user_groq_clients[api_key]
 
+def _is_rate_limit(exc: Exception) -> bool:
+    """True if an exception is a provider rate-limit (Groq SDK, httpx 429, etc.)."""
+    s = str(exc).lower()
+    return (
+        "429" in s
+        or "rate limit" in s
+        or "rate_limit" in s
+        or "rate_limit_exceeded" in s
+        or "ratelimit" in s
+        or "too many requests" in s
+    )
+
+
+def _groq_sdk_create(client, **kwargs) -> str:
+    """Rate-limit-aware Groq SDK call.
+
+    Pauses on a provider-wide cooldown, detects 429 / rate_limit_exceeded,
+    records the cooldown (so every other call waits), waits the window out,
+    and raises LLMRateLimitError instead of falling back to a half-written email.
+    """
+    wait_out_llm_rate_limit()
+    last_exc = None
+    for _ in range(3):
+        try:
+            resp = client.chat.completions.create(**kwargs)
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            if not _is_rate_limit(e):
+                raise
+            retry_after = parse_retry_after(error=e)
+            mark_rate_limited(retry_after)
+            logger.warning("Groq SDK rate limited; pausing %.1fs before retry", retry_after)
+            wait_out_llm_rate_limit()
+            last_exc = e
+    raise LLMRateLimitError(
+        parse_retry_after(error=last_exc),
+        f"Groq rate limit exceeded: {last_exc}",
+    )
+
+
 def groq_inference(
     messages: list[dict[str, str]],
     model: str | None = None,
@@ -224,17 +270,59 @@ def groq_inference(
         )
         return completion.choices[0].message.content or ""
         
+    elif provider == "gemini":
+        from app.services.integrations_service import get_api_key_sync
+        api_key = get_api_key_sync(user_id, "gemini", settings.GEMINI_API_KEY)
+        model_name = model or settings.GEMINI_MODEL or "gemma-4-26b-a4b-it"
+        completion = openai_compatible_inference(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            api_key=api_key,
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        return completion.choices[0].message.content or ""
+        
+    elif provider == "ollama":
+        # Use Ollama locally with llama3.2 (3b)
+        model_name = model or "llama3.2"
+        if "llama3.2" in model_name.lower():
+            model_name = "llama3.2"
+            
+        is_json_requested = any("json" in m["content"].lower() for m in messages)
+        response_format = {"type": "json_object"} if is_json_requested else None
+            
+        last_exc = None
+        for _ in range(3):
+            try:
+                completion = openai_compatible_inference(
+                    base_url="http://127.0.0.1:11434/v1",
+                    api_key="ollama",
+                    model=model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                )
+                return completion.choices[0].message.content or ""
+            except LLMRateLimitError as exc:
+                logger.warning("groq_inference: rate limited, waiting %.1fs before retry", exc.retry_after)
+                wait_out_llm_rate_limit()
+                last_exc = exc
+        raise last_exc
+        
     else:
         client = get_groq_client(user_id)
         model_name = model or settings.GROQ_MODEL or "llama-3.3-70b-versatile"
         try:
-            response = client.chat.completions.create(
+            return _groq_sdk_create(
+                client,
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            return response.choices[0].message.content or ""
         except Exception as e:
             logger.error(f"Groq inference failed: {e}")
             raise e
@@ -274,6 +362,7 @@ def openai_compatible_inference(
     max_tokens: int = 2048,
     tools: list | None = None,
     tool_choice: str | dict | None = None,
+    response_format: dict | None = None,
 ) -> NvidiaCompletion:
     import httpx
     import json
@@ -293,14 +382,29 @@ def openai_compatible_inference(
         payload["tools"] = tools
     if tool_choice:
         payload["tool_choice"] = tool_choice
-        
+    if response_format:
+        payload["response_format"] = response_format
+
     try:
+        # Only honor the Groq rate-limit gate for actual Groq calls.
+        # Gemini/Nvidia/Xiaomi have their own rate limits.
+        if "groq.com" in base_url:
+            wait_out_llm_rate_limit()
         response = httpx.post(
             f"{base_url.rstrip('/')}/chat/completions",
             headers=headers,
             json=payload,
             timeout=120.0
         )
+        if response.status_code == 429:
+            from app.services.llm_rate_gate import LLMRateLimitError, mark_rate_limited, parse_retry_after
+
+            retry_after = parse_retry_after(response=response)
+            mark_rate_limited(retry_after)
+            raise LLMRateLimitError(
+                retry_after,
+                f"LLM provider rate limit (429); retry after {retry_after:.0f}s",
+            )
         response.raise_for_status()
         data = response.json()
         
@@ -348,14 +452,79 @@ def llm_chat_completion(
     temperature: float = 0.3,
     max_tokens: int = 2048,
     user_id: str | None = None,
+    section: str | None = None,
 ) -> Any:
     """
     Execute chat completions dynamically based on provider and model.
     """
+    if not section:
+        prompt_lower = ""
+        if messages:
+            prompt_lower = messages[-1].get("content", "").lower()
+            
+        if "sentiment" in prompt_lower or "classify" in prompt_lower:
+            section = "reply_monitor"
+        elif "connection" in prompt_lower or "note" in prompt_lower:
+            section = "linkedin"
+        elif "research" in prompt_lower or "scrape" in prompt_lower or "profile" in prompt_lower:
+            section = "campaigns"
+        elif "follow" in prompt_lower or "sequence" in prompt_lower:
+            section = "campaigns"
+        else:
+            section = "chatbot"
+            
+        # Overwrite by stack inspection
+        import inspect
+        frame = inspect.currentframe()
+        try:
+            current_frame = frame
+            for _ in range(5):
+                if not current_frame:
+                    break
+                module_name = current_frame.f_globals.get("__name__", "")
+                if "reply_classification" in module_name or "followup" in module_name or "reply_monitor" in module_name:
+                    section = "reply_monitor"
+                    break
+                if "research" in module_name or "personalization" in module_name or "outreach_writer" in module_name:
+                    section = "campaigns"
+                    break
+                if "content_strategy" in module_name:
+                    section = "linkedin"
+                    break
+                current_frame = current_frame.f_back
+        finally:
+            del frame
+
+    if get_llm_section_disabled(section):
+        logger.info(f"LLM is disabled for section '{section}'. Returning mock response.")
+        prompt_lower = ""
+        if messages:
+            prompt_lower = messages[-1].get("content", "").lower()
+            
+        if "sentiment" in prompt_lower or "classify" in prompt_lower:
+            mock_content = '{"classification": "interested", "sentiment": "positive", "lead_score_delta": 15}'
+        elif "connection" in prompt_lower or "note" in prompt_lower:
+            mock_content = "Hi, I saw your profile and was impressed by your experience. I would love to connect and keep in touch!"
+        elif "research" in prompt_lower or "scrape" in prompt_lower or "profile" in prompt_lower:
+            mock_content = '{"lead_summary": "Experienced professional in target domain.", "company_summary": "Innovating growth company.", "pain_points": [], "outreach_angles": []}'
+        elif "follow" in prompt_lower or "sequence" in prompt_lower:
+            mock_content = "Hi,\n\nFollowing up on my previous message. Let me know if you have a few minutes to chat next week.\n\nBest,\n[Name]"
+        elif "analytics" in prompt_lower or "insights" in prompt_lower or "performance" in prompt_lower:
+            mock_content = '{"summary": {"overview": "Campaign is performing strongly with high deliverability and steady engagement.", "performance_grade": "B", "top_wins": ["High email open rates", "Stable delivery metrics"], "top_concerns": ["Slightly below-average click-through rate"]}, "key_metrics": {"open_rate": {"value": 25.0, "benchmark": 21.5, "status": "above"}, "click_rate": {"value": 1.5, "benchmark": 2.3, "status": "below"}, "reply_rate": {"value": 0.8, "benchmark": 1.0, "status": "below"}, "bounce_rate": {"value": 1.2, "benchmark": 2.0, "status": "below"}}, "campaign_comparison": {"comparison_summary": "Performing within target benchmarks relative to historical sequences.", "key_differentiators": ["High quality personalization hooks"]}, "learning_memory_insights": {"lessons_applied": ["Personalized subject lines increase open rate"], "new_insights_recorded": []}, "trends": ["Engagement peaks on weekday mornings"], "whats_working": [{"element": "Subject lines", "why": "Curiosity and directness drive opens", "amplify_how": "Scale similar styles"}], "whats_not_working": [{"element": "Body CTA", "why": "Needs lower friction ask", "root_cause": "Requesting 15m too early", "fix": "Change to yes/no question"}], "recommendations": [{"priority": 1, "action": "Lower CTA friction to a soft reply request", "expected_impact": "Improve reply rate by 10-15%", "effort": "low", "timeline": "immediate"}], "top_performing_leads": []}'
+        else:
+            mock_content = f"This is a mock LLM response generated because LLM calls are paused for {section}."
+
+        msg_obj = NvidiaMessage(content=mock_content)
+        return NvidiaCompletion(choices=[NvidiaChoice(message=msg_obj)])
+
     active_provider = provider
     if not active_provider:
         active_provider = getattr(settings, "LLM_PROVIDER", "nvidia")
     active_provider = active_provider.lower()
+    
+    # Pause if a provider-wide rate-limit cooldown is active (Groq only).
+    if active_provider == "groq":
+        wait_out_llm_rate_limit()
     
     if active_provider == "nvidia":
         from app.services.integrations_service import get_api_key_sync
@@ -385,11 +554,46 @@ def llm_chat_completion(
             tools=tools,
             tool_choice=tool_choice
         )
+    elif active_provider == "gemini":
+        from app.services.integrations_service import get_api_key_sync
+        api_key = get_api_key_sync(user_id, "gemini", settings.GEMINI_API_KEY)
+        model_name = model or settings.GEMINI_MODEL or "gemma-4-26b-a4b-it"
+        return openai_compatible_inference(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            api_key=api_key,
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice
+        )
+    elif active_provider == "ollama":
+        # Use Ollama locally with llama3.2 (3b)
+        model_name = model or "llama3.2"
+        # Map any variants or specific requests to standard llama3.2 tag
+        if "llama3.2" in model_name.lower():
+            model_name = "llama3.2"
+
+        is_json_requested = any("json" in m["content"].lower() for m in messages)
+        response_format = {"type": "json_object"} if is_json_requested else None
+
+        return openai_compatible_inference(
+            base_url="http://127.0.0.1:11434/v1",
+            api_key="ollama",
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format
+        )
     else:
         # groq
         client = get_groq_client(user_id)
         model_name = model or settings.GROQ_MODEL or "llama-3.3-70b-versatile"
-        
+
         kwargs = {
             "model": model_name,
             "messages": messages,
@@ -400,5 +604,10 @@ def llm_chat_completion(
             kwargs["tools"] = tools
         if tool_choice:
             kwargs["tool_choice"] = tool_choice
-            
-        return client.chat.completions.create(**kwargs)
+
+        # _groq_sdk_create returns the text content (like groq_inference);
+        # callers of llm_chat_completion expect a ChatCompletion-shaped object
+        # with .choices[0].message, so wrap it like the other providers do.
+        content = _groq_sdk_create(client, **kwargs)
+        msg_obj = NvidiaMessage(content=content)
+        return NvidiaCompletion(choices=[NvidiaChoice(message=msg_obj)])

@@ -26,37 +26,50 @@ TASK_ROUTING = {
         "provider": "nvidia",
         "model": "nvidia/nemotron-3-ultra-550b-a55b",
         "fallback_provider": "groq",
-        "fallback_model": "llama-3.3-70b-versatile"
+        "fallback_model": "llama-3.3-70b-versatile",
+        "section": "chatbot"
     },
     "EMAIL_GENERATION": {
         "provider": "nvidia",
         "model": "moonshotai/kimi-k2.6",
         "fallback_provider": "groq",
-        "fallback_model": "llama-3.3-70b-versatile"
+        "fallback_model": "llama-3.3-70b-versatile",
+        "section": "campaigns"
     },
     "LINKEDIN_MESSAGE_GENERATION": {
         "provider": "nvidia",
         "model": "moonshotai/kimi-k2.6",
         "fallback_provider": "groq",
-        "fallback_model": "llama-3.3-70b-versatile"
+        "fallback_model": "llama-3.3-70b-versatile",
+        "section": "linkedin"
     },
     "CAMPAIGN_ANALYTICS": {
         "provider": "nvidia",
         "model": "meta/llama-3.3-70b-instruct",
         "fallback_provider": "groq",
-        "fallback_model": "llama-3.3-70b-versatile"
+        "fallback_model": "llama-3.3-70b-versatile",
+        "section": "campaigns"
     },
     "FAST_CHAT_RESPONSES": {
         "provider": "groq",
         "model": "llama-3.3-70b-versatile",
         "fallback_provider": "nvidia",
-        "fallback_model": "moonshotai/kimi-k2.6"
+        "fallback_model": "moonshotai/kimi-k2.6",
+        "section": "chatbot"
     },
     "INTENT_CLASSIFICATION": {
         "provider": "xiaomi",
         "model": "mimo-v2.5",
         "fallback_provider": "groq",
-        "fallback_model": "llama-3.3-70b-versatile"
+        "fallback_model": "llama-3.3-70b-versatile",
+        "section": "reply_monitor"
+    },
+    "email_personalization": {
+        "provider": "groq",
+        "model": "llama-3.3-70b-versatile",
+        "fallback_provider": "gemini",
+        "fallback_model": "gemma-4-26b-a4b-it",
+        "section": "campaigns"
     }
 }
 
@@ -68,6 +81,7 @@ class LLMManager:
         "nvidia": asyncio.Semaphore(3),  # Max 3 concurrent calls
         "groq": asyncio.Semaphore(5),    # Max 5 concurrent calls
         "xiaomi": asyncio.Semaphore(2),  # Max 2 concurrent calls
+        "gemini": asyncio.Semaphore(3),  # Max 3 concurrent calls
     }
     
     # In-memory payload cache to avoid redundant generations
@@ -108,6 +122,7 @@ class LLMManager:
         
         provider = route["provider"]
         model = route["model"]
+        section = route.get("section")
         
         # 2. Check Cache
         cache_key = cls._generate_cache_key(messages, model, tools)
@@ -131,7 +146,8 @@ class LLMManager:
                 user_id=user_id,
                 temperature=temperature,
                 tools=tools,
-                tool_choice=tool_choice
+                tool_choice=tool_choice,
+                section=section
             )
             
             # Cache successful response
@@ -163,19 +179,32 @@ class LLMManager:
         user_id: str,
         temperature: float,
         tools: Optional[List],
-        tool_choice: Optional[str]
+        tool_choice: Optional[str],
+        section: Optional[str] = None
     ) -> Dict[str, Any]:
         """Try primary provider with retries, then fallback to alternative provider."""
+        from app.services.llm_rate_gate import LLMRateLimitError
+
         try:
-            return await cls._execute_call(provider, model, messages, user_id, temperature, tools, tool_choice)
+            return await cls._execute_call(provider, model, messages, user_id, temperature, tools, tool_choice, section)
+        except LLMRateLimitError:
+            # Rate limited on primary provider — try fallback if available.
+            logger.warning(f"LLMManager: Provider '{provider}' rate limited for '{task_type}'. Trying fallback...")
+            if fallback_provider and fallback_model:
+                try:
+                    return await cls._execute_call(fallback_provider, fallback_model, messages, user_id, temperature, tools, tool_choice, section)
+                except Exception as fe:
+                    logger.error(f"LLMManager: Fallback provider '{fallback_provider}' also failed for '{task_type}': {fe}")
+                    raise RuntimeError(f"Primary rate limited. Fallback error: {fe}") from fe
+            raise
         except Exception as e:
             logger.warning(f"LLMManager: Primary provider '{provider}' failed for '{task_type}': {e}. Trying fallback...")
             if fallback_provider and fallback_model:
                 try:
-                    return await cls._execute_call(fallback_provider, fallback_model, messages, user_id, temperature, tools, tool_choice)
+                    return await cls._execute_call(fallback_provider, fallback_model, messages, user_id, temperature, tools, tool_choice, section)
                 except Exception as fe:
                     logger.error(f"LLMManager: Fallback provider '{fallback_provider}' also failed for '{task_type}': {fe}")
-                    raise fe
+                    raise RuntimeError(f"Primary error: {e}. Fallback error: {fe}") from fe
             raise e
 
     @classmethod
@@ -187,24 +216,37 @@ class LLMManager:
         user_id: str,
         temperature: float,
         tools: Optional[List],
-        tool_choice: Optional[str]
+        tool_choice: Optional[str],
+        section: Optional[str] = None
     ) -> Dict[str, Any]:
         """Perform the actual call under semaphore with retry backoff."""
         from app.config.groq_config import llm_chat_completion
         
         sem = cls._semaphores.get(provider, cls._semaphores["groq"])
-        
+
         async with sem:
+            # If the shared rate-limit gate is active AND this is the
+            # primary (Groq) provider, raise immediately so the caller
+            # can fall back to another provider instead of blocking.
+            # Non-primary providers (Gemini, Nvidia) skip the gate check.
+            from app.services.llm_rate_gate import is_rate_limited, remaining as gate_remaining, LLMRateLimitError as _RateErr
+            if provider == "groq" and is_rate_limited():
+                rem = gate_remaining()
+                raise _RateErr(
+                    rem,
+                    f"Rate-limit gate active for {provider}; {rem:.0f}s remaining",
+                )
+
             max_retries = 3
             backoff = 1.0
-            
+
             for attempt in range(max_retries):
                 try:
                     # Execute synchronous/asynchronous LLM call cleanly
                     # Since llm_chat_completion runs synchronously in a thread/directly,
                     # we wrap it in a thread pool execution if needed or call directly.
                     loop = asyncio.get_event_loop()
-                    
+
                     def _call():
                         return llm_chat_completion(
                             messages=messages,
@@ -213,9 +255,10 @@ class LLMManager:
                             tools=tools,
                             tool_choice=tool_choice,
                             temperature=temperature,
-                            user_id=user_id
+                            user_id=user_id,
+                            section=section
                         )
-                        
+
                     chat_completion = await loop.run_in_executor(None, _call)
                     
                     response_message = chat_completion.choices[0].message
@@ -240,6 +283,13 @@ class LLMManager:
                     }
                     
                 except Exception as e:
+                    from app.services.llm_rate_gate import LLMRateLimitError
+
+                    if isinstance(e, LLMRateLimitError):
+                        # Cooldown already recorded by openai_compatible_inference.
+                        # Propagate immediately; the shared gate + scheduler handle
+                        # the wait, so no point burning the remaining retries here.
+                        raise
                     error_str = str(e).lower()
                     # Trigger retry on HTTP 429 or rate limits
                     is_rate_limit = "429" in error_str or "rate limit" in error_str or "too many requests" in error_str

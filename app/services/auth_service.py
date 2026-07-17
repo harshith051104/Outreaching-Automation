@@ -134,3 +134,95 @@ async def get_user_by_email(email: str) -> dict:
     user.pop("_id", None)
     user.pop("password_hash", None)
     return user
+
+
+async def request_password_reset(data) -> dict:
+    """Generate a password reset code for a user."""
+    import random
+    from datetime import datetime, timedelta, timezone
+    import logging
+
+    db = await get_database()
+    email_clean = data.email.lower().strip()
+
+    user = await db.users.find_one({"email": email_clean})
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No user registered with this email address.",
+        )
+
+    code = f"{random.randint(100000, 999999)}"
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+    await db.password_resets.update_one(
+        {"email": email_clean},
+        {
+            "$set": {
+                "code": code,
+                "expires_at": expires_at
+            }
+        },
+        upsert=True
+    )
+
+    logger = logging.getLogger("app.services.auth_service")
+    logger.info(f"PASSWORD RESET REQUEST for {email_clean}. Code: {code}")
+    print(f"\n🔑 [AUTH SERVICE] PASSWORD RESET REQUEST for {email_clean}.\n   Code: {code}\n")
+
+    return {"message": "Reset code generated successfully.", "code": code}
+
+
+async def reset_user_password(data) -> dict:
+    """Verify reset code and update user's password."""
+    from datetime import datetime, timezone
+    from app.auth.password import hash_password
+
+    db = await get_database()
+    email_clean = data.email.lower().strip()
+
+    reset_entry = await db.password_resets.find_one({"email": email_clean})
+    if not reset_entry:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No password reset request found for this email.",
+        )
+
+    now = datetime.now(timezone.utc)
+    expires_at = reset_entry["expires_at"]
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if now > expires_at:
+        await db.password_resets.delete_one({"email": email_clean})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset code has expired. Please request a new one.",
+        )
+
+    if reset_entry["code"] != data.code.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset code.",
+        )
+
+    user = await db.users.find_one({"email": email_clean})
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    await db.users.update_one(
+        {"id": user["id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(data.new_password),
+                "updated_at": now
+            }
+        }
+    )
+
+    await db.password_resets.delete_one({"email": email_clean})
+
+    return {"message": "Password reset successful."}

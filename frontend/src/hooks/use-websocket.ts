@@ -9,14 +9,46 @@ type WebSocketMessage = {
 
 type UseWebSocketOptions = {
   userId: string;
+  path?: string;
+  subscriptions?: string;
   onMessage?: (message: WebSocketMessage) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
   enabled?: boolean;
 };
 
+function buildWsUrl(userId: string, path: string, subscriptions?: string): string {
+  let wsUrl = `ws://127.0.0.1:8000/api/${path}/${userId}`;
+  if (subscriptions) {
+    wsUrl += `?subscriptions=${encodeURIComponent(subscriptions)}`;
+  }
+
+  const publicApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+  if (typeof window !== "undefined") {
+    const loc = window.location;
+    if (loc.hostname !== "localhost" && loc.hostname !== "127.0.0.1") {
+      const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
+      wsUrl = `${protocol}//${loc.host}/api/${path}/${userId}`;
+      if (subscriptions) wsUrl += `?subscriptions=${encodeURIComponent(subscriptions)}`;
+    } else if (publicApiUrl) {
+      let baseUrl = publicApiUrl;
+      if (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+      if (!baseUrl.endsWith("/api") && !baseUrl.includes("/api/")) {
+        baseUrl = `${baseUrl}/api`;
+      }
+      wsUrl = `${baseUrl.replace(/^http/, "ws").replace("localhost", "127.0.0.1")}/${path}/${userId}`;
+      if (subscriptions) wsUrl += `?subscriptions=${encodeURIComponent(subscriptions)}`;
+    }
+  }
+
+  return wsUrl;
+}
+
 export function useWebSocket({
   userId,
+  path = "reply-monitor/ws",
+  subscriptions,
   onMessage,
   onConnect,
   onDisconnect,
@@ -32,39 +64,17 @@ export function useWebSocket({
   const connect = useCallback(() => {
     if (!enabled || !userId) return;
 
-    // Don't try to connect too many times
     if (reconnectAttempts.current >= maxReconnectAttempts) {
       console.log("Max WebSocket reconnect attempts reached");
       return;
     }
 
-    // Clean up existing connection
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
 
-    let wsUrl = `ws://127.0.0.1:8000/api/reply-monitor/ws/${userId}`;
-    const publicApiUrl = process.env.NEXT_PUBLIC_API_URL;
-    
-    if (typeof window !== "undefined") {
-      const loc = window.location;
-      // If we are accessed remotely via a public URL (e.g. ngrok), use the current host relative URL
-      if (loc.hostname !== "localhost" && loc.hostname !== "127.0.0.1") {
-        const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
-        wsUrl = `${protocol}//${loc.host}/api/reply-monitor/ws/${userId}`;
-      } else if (publicApiUrl) {
-        let baseUrl = publicApiUrl;
-        if (baseUrl.endsWith("/")) {
-          baseUrl = baseUrl.slice(0, -1);
-        }
-        if (!baseUrl.endsWith("/api") && !baseUrl.includes("/api/")) {
-          baseUrl = `${baseUrl}/api`;
-        }
-        // Convert http:// -> ws:// and https:// -> wss://, replacing localhost with 127.0.0.1
-        wsUrl = `${baseUrl.replace(/^http/, "ws").replace("localhost", "127.0.0.1")}/reply-monitor/ws/${userId}`;
-      }
-    }
+    const wsUrl = buildWsUrl(userId, path, subscriptions);
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -74,7 +84,7 @@ export function useWebSocket({
         setIsConnected(true);
         reconnectAttempts.current = 0;
         onConnect?.();
-        console.log("WebSocket connected");
+        console.log("WebSocket connected:", path);
       };
 
       ws.onmessage = (event) => {
@@ -91,7 +101,6 @@ export function useWebSocket({
         setIsConnected(false);
         onDisconnect?.();
 
-        // Only reconnect if it wasn't a clean close
         if (event.code !== 1000) {
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
           reconnectAttempts.current += 1;
@@ -104,21 +113,20 @@ export function useWebSocket({
       };
 
       ws.onerror = () => {
-        // Don't log error details - just close and let onhandle reconnect
         ws.close();
       };
     } catch (error) {
       console.error("Failed to create WebSocket:", error);
     }
-  }, [userId, enabled, onMessage, onConnect, onDisconnect]);
+  }, [userId, path, subscriptions, enabled, onMessage, onConnect, onDisconnect]);
 
   const disconnect = useCallback(() => {
-    reconnectAttempts.current = maxReconnectAttempts; // Prevent reconnect
+    reconnectAttempts.current = maxReconnectAttempts;
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
     }
     if (wsRef.current) {
-      wsRef.current.close(1000); // Clean close
+      wsRef.current.close(1000);
       wsRef.current = null;
     }
     setIsConnected(false);
@@ -135,12 +143,11 @@ export function useWebSocket({
     return () => disconnect();
   }, [connect, disconnect]);
 
-  // Send periodic pings to keep connection alive
   useEffect(() => {
     if (!isConnected) return;
 
     const interval = setInterval(() => {
-      sendMessage("ping");
+      sendMessage(JSON.stringify({ type: "ping" }));
     }, 30000);
 
     return () => clearInterval(interval);

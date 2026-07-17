@@ -439,48 +439,331 @@ tools:
         delivered: {type: boolean}
         connection_count: {type: integer}
 
-  linkedin_playwright:
-    name: LinkedIn Playwright Automation
-    purpose: Automate LinkedIn interactions via Playwright browser
-    category: linkedin_outreach
-    api: Playwright Chromium
-    authentication: session_cookies
-    rate_limit:
-      connections_per_day: 20
-      messages_per_day: 50
-      profile_views_per_day: 80
-      min_delay_seconds: 2
-      max_delay_seconds: 5
+  mongodb_query_one:
+    name: MongoDB Query One
+    purpose: Query a single document from MongoDB collection
+    category: database
+    authentication: connection_string
     input_schema:
       type: object
       properties:
-        action:
+        collection:
           type: string
-          enum: [scrape_profile, send_connection, send_message, send_message_by_name, check_invitations]
-          description: The LinkedIn action to perform
-        linkedin_url:
+        query:
+          type: object
+      required: [collection, query]
+    output_schema:
+      type: object
+
+  mongodb_upsert:
+    name: MongoDB Upsert
+    purpose: Insert or update a document in MongoDB collection
+    category: database
+    authentication: connection_string
+    input_schema:
+      type: object
+      properties:
+        collection:
           type: string
-          description: Target LinkedIn profile URL (not needed for send_message_by_name)
-        person_name:
-          type: string
-          description: Target person's name for send_message_by_name action
-        message:
-          type: string
-          description: Message or connection note text
-        user_id:
-          type: string
-          description: User ID for session lookup
-      required: [action, user_id]
+        query:
+          type: object
+        doc:
+          type: object
+      required: [collection, query]
     output_schema:
       type: object
       properties:
-        success: {type: boolean}
-        data: {type: object}
-        error: {type: string}
-    retry_strategy:
-      max_retries: 1
-      backoff_seconds: 30
-    safety:
-      require_human_approval: true
-      random_delay: true
-      session_validation: true
+        upserted_id: {type: string}
+        matched_count: {type: integer}
+        modified_count: {type: integer}
+
+  rag_search:
+    name: RAG Search
+    purpose: Alias for qdrant_search
+    category: memory
+    input_schema:
+      type: object
+      properties:
+        collection:
+          type: string
+        query:
+          type: string
+        limit:
+          type: integer
+      required: [collection, query]
+    output_schema:
+      type: array
+
+  compute_engagement:
+    name: Compute Engagement
+    purpose: Calculate engagement metrics for a lead
+    category: analytics
+    input_schema:
+      type: object
+      properties:
+        lead_id:
+          type: string
+        campaign_id:
+          type: string
+      required: [lead_id, campaign_id]
+    output_schema:
+      type: object
+      properties:
+        opened: {type: boolean}
+        clicked: {type: boolean}
+        open_count: {type: integer}
+        click_count: {type: integer}
+
+  compute_campaign_metrics:
+    name: Compute Campaign Metrics
+    purpose: Calculate analytics metrics for a campaign
+    category: analytics
+    input_schema:
+      type: object
+      properties:
+        campaign_id:
+          type: string
+      required: [campaign_id]
+    output_schema:
+      type: object
+      properties:
+        emails_sent: {type: integer}
+        emails_failed: {type: integer}
+        unique_opens: {type: integer}
+        unique_clicks: {type: integer}
+        total_replies: {type: integer}
+
+  compute_campaign_metrics_batch:
+    name: Compute Campaign Metrics Batch
+    purpose: Calculate analytics metrics for multiple campaigns
+    category: analytics
+    input_schema:
+      type: object
+      properties:
+        campaign_ids:
+          type: array
+          items:
+            type: string
+      required: [campaign_ids]
+    output_schema:
+      type: object
+
+  compute_basic_insights:
+    name: Compute Basic Insights
+    purpose: Generate basic insights from metrics when LLM is unavailable
+    category: analytics
+    input_schema:
+      type: object
+      properties:
+        metrics:
+          type: object
+        campaign:
+          type: object
+    output_schema:
+      type: object
+
+  deduplicate:
+    name: Deduplicate
+    purpose: Remove duplicate entries from a list
+    category: utility
+    input_schema:
+      type: object
+      properties:
+        items:
+          type: array
+        key:
+          type: string
+      required: [items]
+    output_schema:
+      type: object
+      properties:
+        items:
+          type: array
+        removed_count:
+          type: integer
+
+  calculate_quality_score:
+    name: Calculate Quality Score
+    purpose: Calculate lead quality score based on enrichment data
+    category: analytics
+    input_schema:
+      type: object
+      properties:
+        lead:
+          type: object
+    output_schema:
+      type: object
+      properties:
+        score:
+          type: integer
+        factors:
+          type: object
+
+  conditional:
+    name: Conditional
+    purpose: Branch workflow based on conditions
+    category: workflow
+    input_schema:
+      type: object
+      properties:
+        condition:
+          type: string
+        true_step:
+          type: string
+        false_step:
+          type: string
+
+  pass_through:
+    name: Pass Through
+    purpose: Pass input to output without transformation
+    category: workflow
+    input_schema:
+      type: object
+
+  validate:
+    name: Validate
+    purpose: Validate input data against schema
+    category: workflow
+    input_schema:
+      type: object
+      properties:
+        schema:
+          type: object
+        data:
+          type: object
+      required: [schema, data]
+
+  create_followup_tasks:
+    name: Create Followup Tasks
+    purpose: Create follow-up tasks for campaign leads
+    category: campaign
+    input_schema:
+      type: object
+      properties:
+        campaign_id:
+          type: string
+        leads:
+          type: array
+    output_schema:
+      type: object
+      properties:
+        created_count:
+          type: integer
+
+  find_active_campaigns:
+    name: Find Active Campaigns
+    purpose: Find all active campaigns
+    category: campaign
+    input_schema:
+      type: object
+      properties:
+        user_id:
+          type: string
+    output_schema:
+      type: object
+      properties:
+        campaigns:
+          type: array
+
+  select_approach:
+    name: Select Approach
+    purpose: Select outreach approach based on lead data
+    category: campaign
+    input_schema:
+      type: object
+      properties:
+        lead:
+          type: object
+        campaign:
+          type: object
+    output_schema:
+      type: object
+      properties:
+        approach:
+          type: string
+        channel:
+          type: string
+
+  calculate_delay:
+    name: Calculate Delay
+    purpose: Calculate delay between sequence steps
+    category: campaign
+    input_schema:
+      type: object
+      properties:
+        step_number:
+          type: integer
+        last_action:
+          type: string
+    output_schema:
+      type: object
+      properties:
+        delay_hours:
+          type: integer
+
+  resolve_or_select_gmail:
+    name: Resolve or Select Gmail
+    purpose: Resolve Gmail account for sending or select from available
+    category: communication
+    input_schema:
+      type: object
+      properties:
+        user_id:
+          type: string
+        preferred_account:
+          type: string
+    output_schema:
+      type: object
+      properties:
+        gmail_account_id:
+          type: string
+
+  build_campaign_document:
+    name: Build Campaign Document
+    purpose: Build campaign document for storage
+    category: campaign
+    input_schema:
+      type: object
+      properties:
+        campaign:
+          type: object
+        leads:
+          type: array
+    output_schema:
+      type: object
+
+  create_default_steps:
+    name: Create Default Steps
+    purpose: Create default sequence steps for a campaign
+    category: campaign
+    input_schema:
+      type: object
+      properties:
+        campaign:
+          type: object
+    output_schema:
+      type: object
+      properties:
+        steps:
+          type: array
+
+  generate_template_followup:
+    name: Generate Template Followup
+    purpose: Generate follow-up email template
+    category: communication
+    input_schema:
+      type: object
+      properties:
+        lead:
+          type: object
+        campaign:
+          type: object
+        step_number:
+          type: integer
+    output_schema:
+      type: object
+      properties:
+        subject:
+          type: string
+        body:
+          type: string

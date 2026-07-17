@@ -497,11 +497,14 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
 
         elif name == "delete_campaign":
             campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
-            await db.campaigns.update_one(
-                {"id": campaign_id, "user_id": user_id},
-                {"$set": {"status": "deleted", "updated_at": datetime.now(timezone.utc)}}
-            )
-            return json.dumps({"status": "success", "message": f"Campaign {campaign_id} deleted"})
+            if not campaign_id:
+                return json.dumps({"error": "No campaign specified or found"})
+            from app.services.campaign_service import delete_campaign as svc_delete_campaign
+            try:
+                await svc_delete_campaign(campaign_id, user_id)
+                return json.dumps({"status": "success", "message": f"Campaign and all associated leads, emails, and tasks have been permanently deleted."})
+            except Exception as e:
+                return json.dumps({"error": str(e)})
 
         elif name == "duplicate_campaign":
             campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
@@ -543,6 +546,11 @@ async def execute_tool(name: str, args: dict, user_id: str, uploaded_files: list
         elif name == "get_campaign_analytics":
             campaign_id = await _resolve_campaign_id(args.get("campaign_id"), user_id, db)
             stats = await get_campaign_stats(campaign_id=campaign_id)
+            return json.dumps(stats, default=str)
+
+        elif name == "get_dashboard_stats":
+            from app.services.analytics_service import get_dashboard_stats as svc_get_dashboard_stats
+            stats = await svc_get_dashboard_stats(user_id)
             return json.dumps(stats, default=str)
 
         # ── Lead Tools ──────────────────────────────────────────────────
@@ -1753,6 +1761,17 @@ CHATBOT_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dashboard_stats",
+            "description": "Get aggregated dashboard statistics across ALL campaigns: total leads, emails sent today, overall open rate, reply rate, active campaigns count. Use this when user asks about their overall performance, stats, or dashboard.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
     # ── Lead Tools ──────────────────────────────────────────────────────
     {
         "type": "function",
@@ -2833,6 +2852,36 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
             "pending_approval": res.get("pending_approval")
         }
 
+    # 15f. Delete Campaign
+    delete_match = re.search(r"delete\s+(?:the\s+)?(?:campaign\s+)?['\"]?([\w\s\-\.]+?)['\"]?(?:\.|\s*$)", message, re.IGNORECASE)
+    if delete_match:
+        identifier = delete_match.group(1).strip()
+        if identifier and identifier.lower() not in ["campaign", "it", "the campaign"]:
+            campaign_id = await resolve_campaign(identifier)
+            if not campaign_id:
+                return {"response": f"Campaign '{identifier}' not found.", "actions_taken": []}
+            res_str = await execute_tool("delete_campaign", {"campaign_id": campaign_id}, user_id)
+            res = json.loads(res_str)
+            if "error" in res:
+                return {"response": f"Failed to delete campaign '{identifier}': {res['error']}", "actions_taken": []}
+            return {"response": f"Campaign **{identifier}** and all its associated leads, emails, and tasks have been permanently deleted.", "actions_taken": [{"tool": "delete_campaign", "arguments": {"campaign_id": campaign_id}}]}
+
+    # 15g. Dashboard / Overall Stats
+    if re.search(r"\b(?:dashboard|overall|platform|global)\s+(?:stats|statistics|metrics|performance)\b", msg_lower) or msg_lower.strip() in ["stats", "dashboard", "metrics"]:
+        res_str = await execute_tool("get_dashboard_stats", {}, user_id)
+        stats = json.loads(res_str)
+        if "error" in stats:
+            return {"response": f"Failed to retrieve dashboard stats: {stats['error']}", "actions_taken": []}
+        formatted = (
+            f"Overall Platform Statistics:\n"
+            f"- Total Campaigns: {stats.get('total_campaigns', 0)} (Active: {stats.get('active_campaigns', 0)})\n"
+            f"- Total Leads: {stats.get('total_leads', 0)}\n"
+            f"- Emails Sent Today: {stats.get('sent_today', 0)} / Limit: {stats.get('daily_send_limit', 'N/A')}\n"
+            f"- Overall Open Rate: {stats.get('open_rate', 0)}%\n"
+            f"- Overall Reply Rate: {stats.get('reply_rate', 0)}%"
+        )
+        return {"response": formatted, "actions_taken": [{"tool": "get_dashboard_stats", "arguments": {}}]}
+
     return None
 
 
@@ -2874,6 +2923,7 @@ _ACTION_KEYWORDS = [
     "send", "schedule", "campaign", "lead", "email", "message",
     "import", "export", "list", "show", "get", "add", "update",
     "generate", "analyze", "research", "find", "search", "track",
+    "stats", "performance", "metrics", "dashboard",
 ]
 
 
@@ -3075,13 +3125,22 @@ You have access to the following Workers/Tools:
    Note: Each dict in sequence_steps should contain: {step_number: int, channel: "email", delay_days: int, subject_template: str, body_template: str}
 2. "start_campaign": Starts an existing campaign. Arguments: {campaign_id: Optional[str]}
 3. "pause_campaign": Pauses a running campaign. Arguments: {campaign_id: Optional[str]}
-4. "update_campaign": Updates campaign fields or templates. Arguments: {campaign_id: Optional[str], name: Optional[str], description: Optional[str], subject_template: Optional[str], body_template: Optional[str], sequence_steps: Optional[list[dict]]}
-5. "import_leads": Imports leads from a CSV/Google Sheets URL OR adds manual leads listed in the prompt text. Arguments: {campaign_id: Optional[str], file_url: Optional[str], leads: Optional[list[dict]]}
+4. "delete_campaign": Delete a campaign and all its associated leads, emails, and tasks permanently. Arguments: {campaign_id: str}
+5. "update_campaign": Updates campaign fields or templates. Arguments: {campaign_id: Optional[str], name: Optional[str], description: Optional[str], subject_template: Optional[str], body_template: Optional[str], sequence_steps: Optional[list[dict]]}
+6. "import_leads": Imports leads from a CSV/Google Sheets URL OR adds manual leads listed in the prompt text. Arguments: {campaign_id: Optional[str], file_url: Optional[str], leads: Optional[list[dict]]}
    Note: Each dict in leads should contain: {email: str, name: Optional[str], company: Optional[str], role: Optional[str]}
-6. "generate_batch_content": Generates all email templates, subjects, and email follow-up stages in one batch. Arguments: {campaign_name: str, description: str, vision: Optional[str], products: Optional[str], opportunity: Optional[str], impact: Optional[str], cta: Optional[str]}
-7. "sync_google_sheet": Synchronizes campaign leads with Google Sheets. Arguments: {campaign_id: Optional[str]}
-8. "notify_team": Sends a workspace notification. Arguments: {type: str, title: str, message: str}
-9. "log_timeline": Records an event on the activity timeline. Arguments: {event_type: str, description: str}
+7. "generate_batch_content": Generates all email templates, subjects, and email follow-up stages in one batch. Arguments: {campaign_name: str, description: str, vision: Optional[str], products: Optional[str], opportunity: Optional[str], impact: Optional[str], cta: Optional[str]}
+8. "sync_google_sheet": Synchronizes campaign leads with Google Sheets. Arguments: {campaign_id: Optional[str]}
+9. "notify_team": Sends a workspace notification. Arguments: {type: str, title: str, message: str}
+10. "log_timeline": Records an event on the activity timeline. Arguments: {event_type: str, description: str}
+11. "get_dashboard_stats": Get overall platform stats (leads, emails sent today, open rate, reply rate, etc.). Arguments: {}
+
+CRITICAL RULES FOR STATS:
+- If the user asks for stats, metrics, overall leads count, emails sent today, campaign performance, or dashboard overview:
+  - You MUST include "get_dashboard_stats" in the execution plan. Do NOT respond conversationally without calling this tool.
+- If the user asks for deleting a campaign:
+  - You MUST include "delete_campaign" in the execution plan. Do NOT just say it is deleted conversationally.
+- ALWAYS prioritize tool execution over raw conversational responses for action-oriented requests.
 
 CRITICAL RULES FOR TEMPLATES & FOLLOW-UPS:
 - If the user provides their own email template and/or follow-up steps in their prompt (e.g. they paste a "Subject", "Dear", "Follow-Up 1", etc.):

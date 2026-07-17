@@ -41,13 +41,7 @@ async def on_lead_stage_entered(
     updates: dict[str, Any] = {"updated_at": now}
 
     # 1. Update the appropriate stage field
-    if channel == "linkedin":
-        updates["linkedin_stage"] = new_state
-        if new_state == "pending":
-            # Set default 24h backoff for acceptance checks
-            updates["backoff_hours"] = 24
-            updates["next_check_pending_at"] = now + timedelta(hours=24)
-    elif channel == "email":
+    if channel == "email":
         updates["email_stage"] = new_state
     elif channel == "campaign":
         updates["campaign_stage"] = new_state
@@ -58,15 +52,7 @@ async def on_lead_stage_entered(
     # 2. Synchronize stage with tracker checkboxes
     checkbox_updates: dict[str, bool] = {}
 
-    if channel == "linkedin":
-        if new_state == "pending":
-            checkbox_updates["linkedin_connection_sent"] = True
-        elif new_state == "connected":
-            checkbox_updates["linkedin_connection_accepted"] = True
-        elif new_state == "completed":
-            checkbox_updates["linkedin_reply_received"] = True
-
-    elif channel == "email":
+    if channel == "email":
         if new_state == "sent":
             checkbox_updates["email_sent"] = True
         elif new_state == "opened":

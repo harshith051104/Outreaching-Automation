@@ -111,6 +111,19 @@ Return your output strictly as a JSON object matching this structure:
 """
 
     try:
+        from app.services.llm_rate_gate import is_rate_limited
+        if is_rate_limited():
+            logger.info("Reply classification skipped — Groq rate-limit gate active.")
+            return {
+                "classification": "follow_up_later",
+                "sentiment": "neutral",
+                "confidence_score": 0.3,
+                "lead_score_delta": 0,
+                "reasoning": "Groq rate-limit gate active; classification deferred.",
+                "key_signals": [],
+                "recommended_action": "Manual review required.",
+                "urgency": "low",
+            }
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}

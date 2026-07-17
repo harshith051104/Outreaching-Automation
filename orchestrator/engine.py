@@ -339,153 +339,131 @@ class WorkflowExecutor:
 class Orchestrator:
     """
     Metadata-driven agent orchestrator.
-
-    Loads all configuration from declarative files and executes workflows
-    by coordinating agents, skills, and tools.
+    Compatibility Facade wrapper delegating to WorkflowRuntime.
     """
 
     def __init__(self, base_path: Optional[Path] = None):
+        from orchestrator.registry import MetadataRegistry
+        from orchestrator.compiler import WorkflowCompiler
+        from orchestrator.planner import ExecutionPlanner
+        from orchestrator.executor import WorkflowExecutor
+        from orchestrator.state import RuntimeState
+        from orchestrator.event_bus import EventBus
+        from orchestrator.persistence import PersistenceService
+        from orchestrator.dispatcher import ToolDispatcher
+        from orchestrator.dispatcher import register_all_tools
+        from orchestrator.llm.interface import LLMInterface
+        from orchestrator.skill_runtime import SkillRuntime
+        from orchestrator.runtime import WorkflowRuntime
+
         self.base_path = base_path or Path(__file__).parent.parent
-        self.agents: Dict[str, AgentConfig] = {}
-        self.skills: Dict[str, SkillConfig] = {}
-        self.workflows: Dict[str, WorkflowConfig] = {}
-        self.tools: Dict[str, ToolConfig] = {}
-        self.memory_registry: Dict[str, Any] = {}
-        self.tool_instances: Dict[str, Any] = {}
+        
+        # 1. Initialize Event Bus and Persistence Service
+        self.event_bus = EventBus()
+        self.persistence = PersistenceService()
+        
+        # 2. Initialize LLM Interface and Registry
+        self.llm_interface = LLMInterface(persistence=self.persistence, event_bus=self.event_bus)
+        self.registry = MetadataRegistry(base_path=self.base_path)
+        
+        # 3. Initialize Compiler and Planner
+        self.compiler = WorkflowCompiler()
+        self.planner = ExecutionPlanner()
+        
+        # 4. Initialize Tool Dispatcher and register core plugins
+        self.dispatcher = ToolDispatcher(
+            registry=self.registry,
+            persistence=self.persistence,
+            event_bus=self.event_bus
+        )
+        register_all_tools(self.dispatcher)
+        
+        # 5. Initialize Skill Runtime and Executor
+        self.skill_runtime = SkillRuntime(
+            registry=self.registry,
+            dispatcher=self.dispatcher,
+            llm_interface=self.llm_interface
+        )
+        self.workflow_executor = WorkflowExecutor(
+            skill_runtime=self.skill_runtime,
+            dispatcher=self.dispatcher,
+            persistence=self.persistence,
+            event_bus=self.event_bus
+        )
+        
+        # 6. Initialize Workflow Runtime
+        self.runtime = WorkflowRuntime(
+            registry=self.registry,
+            compiler=self.compiler,
+            planner=self.planner,
+            executor=self.workflow_executor,
+            event_bus=self.event_bus,
+            persistence=self.persistence,
+            llm_interface=self.llm_interface
+        )
+
+        # 7. Backward compatibility properties
         self.action_registry = ActionRegistry()
         self.skill_executor = SkillExecutor(self)
-        self.workflow_executor = WorkflowExecutor(self)
         self._initialized = False
         self._init_lock = asyncio.Lock()
         self._groq_client = None
         self._groq_sync_client = None
 
+    @property
+    def agents(self) -> Dict:
+        return self.registry._agents
+
+    @property
+    def skills(self) -> Dict:
+        return self.registry._skills
+
+    @property
+    def workflows(self) -> Dict:
+        return self.registry._workflows
+
+    @property
+    def tools(self) -> Dict:
+        return self.registry._tools
+
+    @property
+    def memory_registry(self) -> Dict:
+        return self.registry.get_memory_registry()
+
     async def initialize(self) -> None:
-        """Load all configurations from disk and validate them."""
+        """Load all configurations from disk and compile them."""
         async with self._init_lock:
             if self._initialized:
                 return
 
-            logger.info("Initializing orchestrator...")
-
-            await self._load_agents()
-            await self._load_skills()
-            await self._load_workflows()
-            await self._load_tools()
-            await self._load_memory_registry()
-            await self._initialize_tool_instances()
-            await self._initialize_action_registry()
-            await self.validate_workflows()
-
-            self._initialized = True
-            logger.info(
-                f"Orchestrator initialized: {len(self.agents)} agents, "
-                f"{len(self.skills)} skills, {len(self.workflows)} workflows, "
-                f"{len(self.tools)} tools"
+            logger.info("Orchestrator Compatibility Facade: Initializing new runtime...")
+            
+            # Load metadata
+            await self.registry.initialize()
+            
+            # Compile workflows
+            self.compiler.compile_all(self.registry)
+            
+            # Register hot-reload compile updates
+            self.registry.register_reload_callback(
+                lambda: self.compiler.compile_all(self.registry)
             )
-
-    async def _load_agents(self) -> None:
-        """Load all agent markdown files."""
-        agents_dir = self.base_path / "agents"
-        if not agents_dir.exists():
-            logger.warning(f"Agents directory not found: {agents_dir}")
-            return
-
-        for md_file in agents_dir.glob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                frontmatter, body = self._parse_yaml_frontmatter(content)
-                agent_name = md_file.stem
-                self.agents[agent_name] = AgentConfig(agent_name, md_file, frontmatter, body)
-                logger.debug(f"Loaded agent: {agent_name}")
-            except Exception as e:
-                logger.error(f"Failed to load agent {md_file}: {e}")
-
-    async def _load_skills(self) -> None:
-        """Load all skill markdown files."""
-        skills_dir = self.base_path / "skills"
-        if not skills_dir.exists():
-            logger.warning(f"Skills directory not found: {skills_dir}")
-            return
-
-        for md_file in skills_dir.glob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                skill_name = md_file.stem
-                self.skills[skill_name] = SkillConfig(skill_name, md_file, content)
-                logger.debug(f"Loaded skill: {skill_name}")
-            except Exception as e:
-                logger.error(f"Failed to load skill {md_file}: {e}")
-
-    async def _load_workflows(self) -> None:
-        """Load all workflow YAML files."""
-        workflows_dir = self.base_path / "workflows"
-        if not workflows_dir.exists():
-            logger.warning(f"Workflows directory not found: {workflows_dir}")
-            return
-
-        for yaml_file in workflows_dir.glob("*.yaml"):
-            try:
-                data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-                workflow_name = data.get("name", yaml_file.stem)
-                self.workflows[workflow_name] = WorkflowConfig(workflow_name, yaml_file, data)
-                logger.debug(f"Loaded workflow: {workflow_name}")
-            except Exception as e:
-                logger.error(f"Failed to load workflow {yaml_file}: {e}")
-
-    async def _load_tools(self) -> None:
-        """Load tools registry."""
-        tools_file = self.base_path / "tools" / "tools.yaml"
-        if not tools_file.exists():
-            logger.warning(f"Tools registry not found: {tools_file}")
-            return
-
-        try:
-            data = yaml.safe_load(tools_file.read_text(encoding="utf-8"))
-            for tool_name, tool_config in data.get("tools", {}).items():
-                self.tools[tool_name] = ToolConfig(tool_name, tool_config)
-            logger.debug(f"Loaded {len(self.tools)} tools")
-        except Exception as e:
-            logger.error(f"Failed to load tools registry: {e}")
-
-    async def _load_memory_registry(self) -> None:
-        """Load memory registry."""
-        memory_file = self.base_path / "memory" / "memory_registry.yaml"
-        if not memory_file.exists():
-            logger.warning(f"Memory registry not found: {memory_file}")
-            return
-
-        try:
-            self.memory_registry = yaml.safe_load(memory_file.read_text(encoding="utf-8"))
-            logger.debug("Loaded memory registry")
-        except Exception as e:
-            logger.error(f"Failed to load memory registry: {e}")
-
-    async def _initialize_tool_instances(self) -> None:
-        """Initialize tool instances for execution."""
-        self.tool_instances = {
-            "mongodb_query": self._mongodb_query,
-            "mongodb_insert": self._mongodb_insert,
-            "mongodb_update": self._mongodb_update,
-            "mongodb_upsert": self._mongodb_upsert,
-            "qdrant_search": self._qdrant_search,
-            "qdrant_upsert": self._qdrant_upsert,
-            "llm_inference": self._llm_inference,
-            "spam_check": self._spam_check,
-            "gmail_send": self._gmail_send,
-            "gmail_check_replies": self._gmail_check_replies,
-            "websocket_broadcast": self._websocket_broadcast,
-        }
-
-    def _parse_yaml_frontmatter(self, content: str) -> tuple[Dict, str]:
-        """Parse YAML frontmatter from markdown content."""
-        pattern = r"^---\n(.*?)\n---\n(.*)$"
-        match = re.match(pattern, content, re.DOTALL)
-        if match:
-            frontmatter = yaml.safe_load(match.group(1)) or {}
-            body = match.group(2)
-            return frontmatter, body
-        return {}, content
+            
+            # Register dynamic legacy agent methods on the dispatcher
+            for attr in dir(self):
+                if attr.startswith("_agent_") and callable(getattr(self, attr)):
+                    clean_name = attr.replace("_agent_", "")
+                    self.dispatcher.register(attr, getattr(self, attr))
+                    if not self.dispatcher.has_tool(clean_name):
+                        self.dispatcher.register(clean_name, getattr(self, attr))
+                    if not self.dispatcher.has_tool(f"{clean_name}_agent"):
+                        self.dispatcher.register(f"{clean_name}_agent", getattr(self, attr))
+                    
+            # Register backward-compatible tool instances on dispatcher
+            self.dispatcher.register("run_generic_agent", self._run_generic_agent)
+            
+            self._initialized = True
+            logger.info("Orchestrator Compatibility Facade: Initialization completed.")
 
     async def execute_workflow(
         self,
@@ -493,25 +471,26 @@ class Orchestrator:
         inputs: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Execute a workflow by name with given inputs.
-
-        Args:
-            workflow_name: Name of the workflow to execute
-            inputs: Input parameters for the workflow
-            context: Shared execution context
-
-        Returns:
-            Workflow outputs
-        """
+        """Backward-compatible execute_workflow delegation."""
         if not self._initialized:
             await self.initialize()
 
-        workflow = self.workflows.get(workflow_name)
-        if not workflow:
-            raise ValueError(f"Workflow not found: {workflow_name}")
+        ctx_dict = context or {}
+        campaign = ctx_dict.get("campaign")
+        lead = ctx_dict.get("lead")
+        user = ctx_dict.get("user")
+        settings = ctx_dict.get("settings")
+        correlation_id = ctx_dict.get("workflow_run_id")
 
-        return await self.workflow_executor.execute(workflow, inputs, context)
+        return await self.runtime.run(
+            workflow_id=workflow_name,
+            inputs=inputs,
+            campaign=campaign,
+            lead=lead,
+            user=user,
+            settings=settings,
+            correlation_id=correlation_id
+        )
 
     async def _execute_agent(self, agent_name: str, input_template: Dict, ctx: Dict) -> Any:
         """Execute an agent with given inputs dynamically using configured handlers or a generic LLM run."""

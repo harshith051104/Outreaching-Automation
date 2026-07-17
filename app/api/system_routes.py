@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Any
 import os
+import logging
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from dotenv import set_key, dotenv_values
 from app.api.auth_routes import get_current_user
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/system", tags=["System Configuration"])
 
@@ -195,6 +199,106 @@ async def import_backup(
     """
     from app.services.backup_service import restore_backup
     return await restore_backup(current_user["id"], data)
+
+
+class SystemPreferencesSchema(BaseModel):
+    defaultTone: str = "Professional"
+    focusKeywords: str = ""
+    dailyLimit: int = 50
+    spacingDelay: int = 30
+    randomOffset: bool = True
+    timezone: str = "America/New_York"
+
+
+@router.get("/preferences")
+async def get_system_preferences(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """Retrieve the global system preferences for the current user."""
+    from app.config.mongodb_config import get_database
+    db = await get_database()
+    config = await db.system_settings.find_one({"user_id": current_user["id"], "type": "system_preferences"})
+    if config:
+        config.pop("_id", None)
+        return config
+    # Fallback/default config
+    return {
+        "defaultTone": "Professional",
+        "focusKeywords": "",
+        "dailyLimit": 50,
+        "spacingDelay": 30,
+        "randomOffset": True,
+        "timezone": "America/New_York",
+    }
+
+
+@router.post("/preferences")
+async def save_system_preferences(body: SystemPreferencesSchema, current_user: dict = Depends(get_current_user)):
+    """Save the global system preferences for the current user."""
+    from app.config.mongodb_config import get_database
+    from datetime import datetime, timezone
+    db = await get_database()
+    
+    update_data = body.dict()
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    
+    await db.system_settings.update_one(
+        {"user_id": current_user["id"], "type": "system_preferences"},
+        {"$set": update_data},
+        upsert=True
+    )
+
+    # Resume any deferred tasks or followups for this user since the daily limit was updated
+    now = datetime.now(timezone.utc)
+    await db.scheduled_tasks.update_many(
+        {"user_id": current_user["id"], "daily_limit_deferred": True},
+        {"$set": {
+            "scheduled_at": now,
+            "daily_limit_deferred": False,
+            "updated_at": now
+        }}
+    )
+    await db.followup_tasks.update_many(
+        {"user_id": current_user["id"], "daily_limit_deferred": True},
+        {"$set": {
+            "scheduled_at": now,
+            "daily_limit_deferred": False,
+            "updated_at": now
+        }}
+    )
+
+    return {"message": "Preferences saved successfully."}
+
+
+@router.get("/llm-status")
+async def get_llm_status(section: str = "campaigns", current_user: User = Depends(get_current_user)):
+    """Get the LLM disabled state for a specific section."""
+    from app.config.groq_config import get_llm_section_disabled
+    disabled = get_llm_section_disabled(section)
+    return {"disabled": disabled}
+
+
+@router.post("/llm-toggle")
+async def toggle_llm_status(data: dict, current_user: User = Depends(get_current_user)):
+    """Toggle the LLM disabled state for a specific section."""
+    from app.config.groq_config import set_llm_section_disabled
+    from app.config.mongodb_config import get_database
+    
+    disabled = data.get("disabled", False)
+    section = data.get("section", "campaigns")
+    
+    set_llm_section_disabled(section, disabled)
+    
+    # Persist to database
+    try:
+        db = await get_database()
+        await db.system_settings.update_one(
+            {"key": f"disable_llm_{section}"},
+            {"$set": {"value": disabled, "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to persist LLM toggle: {exc}")
+    
+    return {"success": True, "disabled": disabled, "section": section}
 
 
 

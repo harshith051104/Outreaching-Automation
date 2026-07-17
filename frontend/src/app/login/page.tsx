@@ -215,12 +215,17 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '13px', color: 'rgba(167,139,250,0.6)' }}>
-          Don&apos;t have an account?{' '}
-          <Link href="/register" style={{ color: '#a78bfa', textDecoration: 'none', fontWeight: '600' }}>
-            Sign up
+        <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '13px', color: 'rgba(167,139,250,0.6)', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
+          <span>
+            Don&apos;t have an account?{' '}
+            <Link href="/register" style={{ color: '#a78bfa', textDecoration: 'none', fontWeight: '600' }}>
+              Sign up
+            </Link>
+          </span>
+          <Link href="/forgot-password" style={{ color: 'rgba(167,139,250,0.8)', textDecoration: 'underline', fontSize: '12px' }}>
+            Forgot password?
           </Link>
-        </p>
+        </div>
 
         <style>{`
           @keyframes spin { to { transform: rotate(360deg); } }

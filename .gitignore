@@ -52,3 +52,6 @@ Thumbs.db
 graphify-out/
 .agents/
 .claude/
+
+# LLM rate-limit cooldown state (runtime, cross-process)
+app/services/.llm_rate_limit.json

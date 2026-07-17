@@ -778,7 +778,7 @@ export default function CampaignDetailPage() {
 
                 {/* Email Body */}
                 <div
-                  className="p-6 text-sm text-gray-800 bg-white min-h-[160px] whitespace-pre-wrap leading-relaxed"
+                  className="p-6 text-sm text-gray-800 bg-white min-h-[160px] whitespace-pre-wrap leading-relaxed override-email-colors"
                   dangerouslySetInnerHTML={{
                     __html: renderTemplate(previewBody, selectedLead)
                   }}

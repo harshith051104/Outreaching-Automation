@@ -1,16 +1,30 @@
 """
 Tracking service layer.
 
-Records email open, click, and reply events and provides
-aggregated tracking statistics for campaigns.
-
-Enhanced to dispatch webhook events for real-time notifications.
+Backward-compatible wrappers that delegate to email_delivery/ tracking modules.
 """
 
 from datetime import datetime, timezone
 
 from app.config.mongodb_config import get_database
 from app.utils.id_generator import generate_id
+
+# Re-export email_delivery tracking modules for callers that want the new API
+from email_delivery.tracking.open_tracker import record_open as _record_open_new  # noqa: F401
+from email_delivery.tracking.click_tracker import (  # noqa: F401
+    record_click as _record_click_new,
+    build_click_tracking_url,
+    replace_links_with_tracking,
+    parse_click_url,
+)
+from email_delivery.tracking.reply_detector import (  # noqa: F401
+    record_reply as _record_reply_new,
+    is_reply_from_lead,
+    extract_reply_body,
+)
+from email_delivery.models import EmailRecord, EmailStatus  # noqa: F401
+from email_delivery.persistence import EmailPersistence  # noqa: F401
+from email_delivery.analytics import EngagementScorer, CampaignAnalytics  # noqa: F401
 
 
 async def _get_email_by_tracking_id(tracking_id: str) -> dict | None:
@@ -23,246 +37,36 @@ async def record_open(tracking_id: str, ip: str, user_agent: str) -> None:
     """
     Record an email open event.
 
-    Looks up the email by tracking_id, creates a tracking event,
-    and bumps the lead's engagement score.
+    Backward-compatible wrapper. Delegates to email_delivery.tracking.open_tracker
+    for the core logic while preserving the existing call signature.
     """
-    email = await _get_email_by_tracking_id(tracking_id)
-    if not email:
+    email_doc = await _get_email_by_tracking_id(tracking_id)
+    if not email_doc:
         return
 
-    db = await get_database()
-    now = datetime.now(timezone.utc)
-
-    event_doc = {
-        "id": generate_id(),
-        "tracking_id": tracking_id,
-        "email_id": email["id"],
-        "campaign_id": email.get("campaign_id"),
-        "lead_id": email.get("lead_id"),
-        "event_type": "open",
-        "ip_address": ip,
-        "user_agent": user_agent,
-        "metadata": {},
-        "timestamp": now,
-    }
-    await db.tracking_events.insert_one(event_doc)
-
-    if email.get("lead_id"):
-        await db.leads.update_one(
-            {"id": email["lead_id"]},
-            {"$inc": {"engagement_score": 1.0}},
-        )
-
-    if email.get("campaign_id"):
-        from app.services.analytics_service import update_campaign_analytics
-        await update_campaign_analytics(email["campaign_id"])
-
-    # Auto-update tracker checkbox: email_opened
-    if email.get("lead_id") and email.get("user_id"):
-        try:
-            from app.services.outreach_tracker_service import update_checkboxes
-            await update_checkboxes(
-                lead_id=email["lead_id"],
-                user_id=email["user_id"],
-                updates={"email_opened": True},
-                trigger_sync=False,
-            )
-        except Exception:
-            pass
-
-    try:
-        from app.services.webhook_service import dispatch_event
-        from app.schemas.campaign_v2 import WebhookEventType
-
-        campaign = None
-        if email.get("campaign_id"):
-            campaign = await db.campaigns.find_one({"id": email["campaign_id"]})
-
-        await dispatch_event(
-            event_type=WebhookEventType.EMAIL_OPENED,
-            campaign_id=email.get("campaign_id", ""),
-            campaign_name=campaign.get("name", "") if campaign else "",
-            workspace=campaign.get("user_id", "") if campaign else "",
-            data={
-                "lead_email": email.get("to_email", ""),
-                "email_account": email.get("from_email", ""),
-                "email_id": email.get("id", ""),
-                "email_subject": email.get("subject", ""),
-            },
-        )
-    except Exception:
-        pass
+    email_record = EmailRecord.from_doc({k: v for k, v in email_doc.items() if k != "_id"})
+    await _record_open_new(email_record, ip=ip, user_agent=user_agent)
 
 
 async def record_click(
     tracking_id: str, url: str, ip: str, user_agent: str
 ) -> None:
-    """Record a link click event."""
-    email = await _get_email_by_tracking_id(tracking_id)
-    if not email:
+    """Record a link click event. Backward-compatible wrapper."""
+    email_doc = await _get_email_by_tracking_id(tracking_id)
+    if not email_doc:
         return
 
-    db = await get_database()
-    now = datetime.now(timezone.utc)
-
-    event_doc = {
-        "id": generate_id(),
-        "tracking_id": tracking_id,
-        "email_id": email["id"],
-        "campaign_id": email.get("campaign_id"),
-        "lead_id": email.get("lead_id"),
-        "event_type": "click",
-        "ip_address": ip,
-        "user_agent": user_agent,
-        "metadata": {"url": url},
-        "timestamp": now,
-    }
-    await db.tracking_events.insert_one(event_doc)
-
-    if email.get("lead_id"):
-        await db.leads.update_one(
-            {"id": email["lead_id"]},
-            {"$inc": {"engagement_score": 2.0}},
-        )
-
-    if email.get("campaign_id"):
-        from app.services.analytics_service import update_campaign_analytics
-        await update_campaign_analytics(email["campaign_id"])
-
-    try:
-        from app.services.webhook_service import dispatch_event
-        from app.schemas.campaign_v2 import WebhookEventType
-
-        campaign = None
-        if email.get("campaign_id"):
-            campaign = await db.campaigns.find_one({"id": email["campaign_id"]})
-
-        await dispatch_event(
-            event_type=WebhookEventType.LINK_CLICKED,
-            campaign_id=email.get("campaign_id", ""),
-            campaign_name=campaign.get("name", "") if campaign else "",
-            workspace=campaign.get("user_id", "") if campaign else "",
-            data={
-                "lead_email": email.get("to_email", ""),
-                "email_account": email.get("from_email", ""),
-                "email_id": email.get("id", ""),
-                "link_url": url,
-            },
-        )
-    except Exception:
-        pass
+    email_record = EmailRecord.from_doc({k: v for k, v in email_doc.items() if k != "_id"})
+    await _record_click_new(email_record, url=url, ip=ip, user_agent=user_agent)
 
 
 async def record_reply(tracking_id: str, reply_data: dict, gmail_thread_id: str = "") -> None:
     """
     Record a reply event and store the reply document.
 
-    reply_data should contain: gmail_message_id, from, subject, snippet, date
-    gmail_thread_id is optional - if provided, the reply can be sent in the same thread later.
+    Backward-compatible wrapper. Delegates to email_delivery.tracking.reply_detector.
     """
-    email = await _get_email_by_tracking_id(tracking_id)
-    if not email:
-        return
-
-    db = await get_database()
-
-    gmail_message_id = reply_data.get("gmail_message_id")
-    if gmail_message_id:
-        existing_reply = await db.replies.find_one({"gmail_message_id": gmail_message_id})
-        if existing_reply:
-            return
-
-    now = datetime.now(timezone.utc)
-
-    event_doc = {
-        "id": generate_id(),
-        "tracking_id": tracking_id,
-        "email_id": email["id"],
-        "campaign_id": email.get("campaign_id"),
-        "lead_id": email.get("lead_id"),
-        "event_type": "reply",
-        "ip_address": "",
-        "user_agent": "",
-        "metadata": reply_data,
-        "timestamp": now,
-    }
-    await db.tracking_events.insert_one(event_doc)
-
-    # If gmail_thread_id not passed directly, try to get it from the original email document
-    if not gmail_thread_id:
-        gmail_thread_id = email.get("gmail_thread_id", "")
-
-    reply_doc = {
-        "id": generate_id(),
-        "email_id": email["id"],
-        "campaign_id": email.get("campaign_id"),
-        "lead_id": email.get("lead_id"),
-        "gmail_message_id": reply_data.get("gmail_message_id", ""),
-        "gmail_thread_id": gmail_thread_id,  # Store thread ID for reply threading
-        "from_email": reply_data.get("from", ""),
-        "subject": reply_data.get("subject", ""),
-        "snippet": reply_data.get("snippet", ""),
-        "body": reply_data.get("body", ""),
-        "classification": None,
-        "sentiment": None,
-        "received_at": now,
-        "created_at": now,
-    }
-    await db.replies.insert_one(reply_doc)
-
-    if email.get("lead_id"):
-        await db.leads.update_one(
-            {"id": email["lead_id"]},
-            {
-                "$inc": {"engagement_score": 5.0},
-                "$set": {"status": "replied", "updated_at": now},
-            },
-        )
-
-    if email.get("lead_id"):
-        from app.services.followup_service import cancel_lead_followups
-        await cancel_lead_followups(email["lead_id"])
-
-    if email.get("campaign_id"):
-        from app.services.analytics_service import update_campaign_analytics
-        await update_campaign_analytics(email["campaign_id"])
-
-    # Auto-update tracker checkboxes: email_replied (and email_opened)
-    if email.get("lead_id") and email.get("user_id"):
-        try:
-            from app.services.outreach_tracker_service import update_checkboxes
-            await update_checkboxes(
-                lead_id=email["lead_id"],
-                user_id=email["user_id"],
-                updates={"email_replied": True, "email_opened": True},
-                trigger_sync=True,
-            )
-        except Exception:
-            pass
-
-    try:
-        from app.services.webhook_service import dispatch_event
-        from app.schemas.campaign_v2 import WebhookEventType
-
-        campaign = None
-        if email.get("campaign_id"):
-            campaign = await db.campaigns.find_one({"id": email["campaign_id"]})
-
-        await dispatch_event(
-            event_type=WebhookEventType.REPLY_RECEIVED,
-            campaign_id=email.get("campaign_id", ""),
-            campaign_name=campaign.get("name", "") if campaign else "",
-            workspace=campaign.get("user_id", "") if campaign else "",
-            data={
-                "lead_email": reply_data.get("from", ""),
-                "email_id": email.get("id", ""),
-                "email_subject": reply_data.get("subject", ""),
-                "reply_text_snippet": reply_data.get("snippet", ""),
-                "reply_subject": reply_data.get("subject", ""),
-            },
-        )
-    except Exception:
-        pass
+    await _record_reply_new(tracking_id, reply_data, gmail_thread_id=gmail_thread_id)
 
 
 async def get_tracking_events(campaign_id: str) -> list:
@@ -287,9 +91,7 @@ async def get_email_tracking(tracking_id: str) -> list:
 
 
 async def get_tracking_stats(campaign_id: str) -> dict:
-    """
-    Aggregate open/click/reply counts for a campaign.
-    """
+    """Aggregate open/click/reply counts for a campaign."""
     db = await get_database()
 
     pipeline = [

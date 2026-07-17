@@ -224,6 +224,10 @@ async def lifespan(app: FastAPI):
         from orchestrator.engine import get_orchestrator
         orchestrator = await get_orchestrator()
         logger.info("Metadata-driven orchestrator initialized")
+
+        from dashboard.event_router import event_router
+        event_router.attach_event_bus(orchestrator.event_bus)
+        logger.info("Dashboard event router attached to EventBus")
     except Exception as exc:
         logger.warning(f"Could not initialize orchestrator: {exc}")
 
@@ -258,17 +262,26 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application started at %s", datetime.now(timezone.utc).isoformat())
 
-    campaign_processor_task = asyncio.create_task(_campaign_processor_loop())
+    from app.config.settings import settings
+    campaign_processor_task = None
+    if not settings.DISABLE_LOCAL_SCHEDULER:
+        logger.info("Starting local campaign processor background loop inside FastAPI...")
+        campaign_processor_task = asyncio.create_task(_campaign_processor_loop())
+    else:
+        logger.info("Local FastAPI background scheduler loop is disabled (running on Celery instead).")
+        
     sheets_sync_task = asyncio.create_task(_sheets_sync_loop())
 
     yield
 
-    campaign_processor_task.cancel()
+    if campaign_processor_task:
+        campaign_processor_task.cancel()
     sheets_sync_task.cancel()
-    try:
-        await campaign_processor_task
-    except asyncio.CancelledError:
-        pass
+    if campaign_processor_task:
+        try:
+            await campaign_processor_task
+        except asyncio.CancelledError:
+            pass
     try:
         await sheets_sync_task
     except asyncio.CancelledError:
@@ -684,25 +697,6 @@ def create_app() -> FastAPI:
         except Exception as e:
             return JSONResponse(status_code=503, content={"status": "unhealthy", "reason": str(e)})
 
-    @app.get("/health/linkedin_diagnose")
-    async def linkedin_diagnose():
-        from app.config.mongodb_config import get_database
-        db = await get_database()
-        sessions = await db.linkedin_sessions.find({}).to_list(length=10)
-        return {
-            "sessions": [
-                {
-                    "user_id": s.get("user_id"),
-                    "status": s.get("status"),
-                    "account_name": s.get("account_name"),
-                    "last_validated_at": s.get("last_validated_at"),
-                    "updated_at": s.get("updated_at"),
-                    "has_cookies": bool(s.get("cookies_encrypted"))
-                }
-                for s in sessions
-            ]
-        }
-
     from app.api.auth_routes import router as auth_router
     from app.api.campaign_routes import router as campaign_router
     from app.api.chatbot_routes import router as chatbot_router
@@ -725,22 +719,22 @@ def create_app() -> FastAPI:
     from app.api.signal_routes import router as signal_router
     from app.api.pitch_deck_routes import router as pitch_deck_router
     from app.api.inbox_placement_routes import router as inbox_placement_router
-    from app.api.linkedin_routes import router as linkedin_router
     from app.api.task_routes import router as task_router
     from app.api.task_comment_routes import router as task_comment_router
     from app.api.suggestion_routes import router as suggestion_router
     from app.api.notification_routes import router as notification_router
     from app.api.task_tracker_dashboard import router as task_tracker_dashboard_router
-
+ 
     # ── New platform upgrade routers ──────────────────────────────────────
     from app.api.integrations_routes import router as integrations_router
     from app.api.outreach_tracker_routes import router as outreach_tracker_router
     from app.api.chatbot_approval_routes import router as chatbot_approval_router
     from app.api.audit_routes import router as audit_router
     from app.api.kb_routes import router as kb_router
+    from dashboard.api import router as dashboard_router
 
     api_prefix = settings.API_PREFIX
-
+ 
     app.include_router(auth_router, prefix=api_prefix, tags=["Authentication"])
     app.include_router(gmail_router, prefix=api_prefix, tags=["Gmail"])
     app.include_router(campaign_router, prefix=api_prefix, tags=["Campaigns"])
@@ -760,7 +754,6 @@ def create_app() -> FastAPI:
     app.include_router(enrichment_router, prefix=api_prefix, tags=["Contact Enrichment"])
     app.include_router(signal_router, prefix=api_prefix, tags=["Signal Intelligence"])
     app.include_router(pitch_deck_router, prefix=api_prefix, tags=["Pitch Decks"])
-    app.include_router(linkedin_router, prefix=api_prefix, tags=["LinkedIn"])
     app.include_router(inbox_placement_router, prefix=api_prefix, tags=["Inbox Placement"])
     app.include_router(task_router, prefix=api_prefix)
     app.include_router(task_comment_router, prefix=api_prefix)
@@ -774,6 +767,7 @@ def create_app() -> FastAPI:
     app.include_router(chatbot_approval_router, prefix=api_prefix, tags=["Chatbot Approvals"])
     app.include_router(audit_router, prefix=api_prefix, tags=["Audit Trail"])
     app.include_router(kb_router, prefix=api_prefix, tags=["AI Knowledge Base"])
+    app.include_router(dashboard_router)
 
     return app
 
