@@ -6,6 +6,20 @@ Maintains backward compatibility with existing FastAPI routes, MongoDB schemas,
 Celery workers, Gmail integration, and campaign execution flow.
 """
 
+import sys
+import os
+
+# Ensure project root is in sys.path
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+try:
+    import campaigns
+    print(f"\n📦 [CAMPAIGN_TASKS IMPORT] campaigns module imported from: {campaigns.__file__}\n")
+except Exception as e:
+    print(f"\n❌ [CAMPAIGN_TASKS IMPORT] Failed to import campaigns: {e}\n")
+
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -575,6 +589,13 @@ from app.config.redis_config import celery_app
 @celery_app.task(name="app.tasks.campaign_tasks.process_active_campaigns")
 def process_active_campaigns_task():
     """Celery task wrapper to find active campaigns and schedule sequences for new leads."""
+    import sys
+    import os
+    # Ensure project root is in sys.path inside worker process context
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+        
     import asyncio
     try:
         loop = asyncio.get_event_loop()
@@ -686,9 +707,19 @@ async def _process_active_campaigns_async() -> dict:
 def process_scheduled_campaign_tasks_task():
     """Celery task wrapper to process scheduled campaign tasks."""
     import asyncio
+    import sys
+    import os
+    
+    # Ensure project root is in sys.path inside worker process context
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+        
     from app.services.task_scheduler_service import TaskSchedulerService
 
     logger.info("Celery Task: Processing scheduled campaign tasks...")
+    logger.info("Celery Task CWD: %s", os.getcwd())
+    logger.info("Celery Task sys.path: %s", sys.path)
 
     try:
         loop = asyncio.get_event_loop()

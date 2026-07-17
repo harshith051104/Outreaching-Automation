@@ -7,6 +7,19 @@ and analytics refresh.
 """
 
 import sys
+import os
+
+# Ensure the project root is in sys.path
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+try:
+    import campaigns
+    print(f"\n📦 [CELERY STARTUP] campaigns module imported from: {campaigns.__file__}\n")
+except Exception as e:
+    print(f"\n❌ [CELERY STARTUP] Failed to import campaigns: {e}\n")
+
 import signal
 
 if sys.platform == "win32":
@@ -16,8 +29,8 @@ if sys.platform == "win32":
 
     import platform
     from collections import namedtuple
-    UnameResult = namedtuple('uname_result', ['system', 'node', 'release', 'version', 'machine'])
-    platform.uname = lambda: UnameResult('Windows', 'localhost', '10', '10.0.0', 'AMD64')
+    UnameResult = namedtuple('uname_result', ['system', 'node', 'release', 'version', 'machine', 'processor'])
+    platform.uname = lambda: UnameResult('Windows', 'localhost', '10', '10.0.0', 'AMD64', 'Intel')
 
     import asyncio
     try:
@@ -34,7 +47,6 @@ celery_app.conf.update(
         "app.tasks.followup_tasks",
         "app.tasks.tracking_tasks",
         "app.tasks.analytics_tasks",
-        "app.tasks.linkedin_tasks",
     ]
 )
 
@@ -70,10 +82,6 @@ celery_app.conf.update(
         },
         "update-analytics-every-15-minutes": {
             "task": "app.tasks.analytics_tasks.refresh_all_campaign_analytics",
-            "schedule": 900.0,
-        },
-        "poll-linkedin-every-15-minutes": {
-            "task": "app.tasks.linkedin_tasks.poll_linkedin_inbox",
             "schedule": 900.0,
         },
     },
