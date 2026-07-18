@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.auth.dependencies import get_current_user, get_manager_user
+from app.auth.dependencies import get_current_user, get_manager_user, get_admin_user
 from app.config.mongodb_config import get_database
 from app.services.outreach_tracker_service import (
     CHECKBOX_FIELDS,
@@ -198,9 +198,9 @@ async def get_all_users(current_user: dict = Depends(get_current_user)):
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 async def create_user(
     body: UserCreateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_admin_user),
 ):
-    """Create a new user account (admin/manager can add users, or general users can add teammate)."""
+    """Create a new user account (only admin can manage team members)."""
     db = await get_database()
     existing = await db.users.find_one({"email": body.email.lower().strip()})
     if existing:
@@ -234,9 +234,9 @@ async def create_user(
 async def update_user_endpoint(
     user_id: str,
     body: UserUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_admin_user),
 ):
-    """Update a user's details."""
+    """Update a user's details (only admin can manage team members)."""
     db = await get_database()
     user = await db.users.find_one({"id": user_id})
     if not user:
@@ -275,9 +275,9 @@ async def update_user_endpoint(
 @router.delete("/users/{user_id}")
 async def delete_user_endpoint(
     user_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_admin_user),
 ):
-    """Delete a team user account."""
+    """Delete a team user account (only admin can manage team members)."""
     db = await get_database()
     if user_id == current_user["id"]:
         raise HTTPException(

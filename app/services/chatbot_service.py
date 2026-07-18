@@ -3028,6 +3028,54 @@ async def handle_chatbot_chat(
     _current_uploaded_files = uploaded_files or []
     
     db = await get_database()
+
+    # Process uploaded files to extract actual document content for RAG context
+    parsed_files_content = ""
+    if uploaded_files:
+        import os
+        for f in uploaded_files:
+            f_id = f.get("id")
+            f_name = f.get("name", "")
+            if not f_id:
+                local_match = re.search(r"/api/files/([^/]+)/download", f.get("url", ""))
+                if local_match:
+                    f_id = local_match.group(1)
+            
+            if f_id:
+                file_doc = await db.uploaded_files.find_one({"id": f_id})
+                if file_doc and file_doc.get("file_path"):
+                    path = file_doc["file_path"]
+                    if os.path.exists(path):
+                        try:
+                            ext = os.path.splitext(f_name)[1].lower()
+                            file_text = ""
+                            if ext in (".csv", ".txt"):
+                                with open(path, "r", encoding="utf-8", errors="ignore") as file_io:
+                                    lines = [file_io.readline() for _ in range(50)]
+                                    file_text = "".join(lines)
+                            elif ext in (".xlsx", ".xls"):
+                                import openpyxl
+                                import io
+                                with open(path, "rb") as file_io:
+                                    wb = openpyxl.load_workbook(filename=io.BytesIO(file_io.read()), data_only=True, read_only=True)
+                                    if wb.sheetnames:
+                                        sheet = wb.active or wb[wb.sheetnames[0]]
+                                        rows = []
+                                        for row_idx, row in enumerate(sheet.iter_rows(values_only=True)):
+                                            if row_idx >= 50:
+                                                break
+                                            rows.append(", ".join([str(val) if val is not None else "" for val in row]))
+                                        file_text = "\n".join(rows)
+                                        wb.close()
+                            
+                            if file_text:
+                                parsed_files_content += f"\n\n--- Content of Uploaded File: {f_name} ---\n{file_text}\n---------------------------------------\n"
+                        except Exception as parse_err:
+                            logger.error(f"Error parsing uploaded file {f_name} for chat: {parse_err}")
+
+    if parsed_files_content:
+        message = (message or "") + parsed_files_content
+
     user = await db.users.find_one({"id": user_id})
     user_name = user.get("name", "") if user else ""
     user_email = user.get("email", "") if user else ""

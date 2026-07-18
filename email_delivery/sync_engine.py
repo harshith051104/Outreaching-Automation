@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 async def poll_gmail_replies() -> Dict[str, Any]:
     db = await get_database()
-    cursor = db.campaigns.find({"status": "active", "gmail_account_id": {"$ne": ""}}).limit(50)
+    cursor = db.campaigns.find({
+        "status": {"$in": ["active", "paused", "completed"]},
+        "gmail_account_id": {"$ne": ""}
+    }).limit(50)
     campaigns = await cursor.to_list(length=50)
 
     if not campaigns:

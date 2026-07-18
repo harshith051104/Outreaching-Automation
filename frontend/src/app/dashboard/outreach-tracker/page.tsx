@@ -21,6 +21,7 @@ import { getCampaigns } from "@/services/campaign-api";
 import { createLead, deleteLead } from "@/services/lead-api";
 import type { Campaign } from "@/types/campaign";
 import Link from "next/link";
+import { useAuthStore } from "@/store/auth-store";
 import {
   Plus,
   Menu,
@@ -87,6 +88,9 @@ function CheckCell({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function OutreachTrackerPage() {
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === "admin";
+
   const [data, setData] = useState<TrackerResponse>({
     total: 0, page: 1, page_size: 50, total_pages: 1, leads: [],
   });
@@ -499,13 +503,15 @@ export default function OutreachTrackerPage() {
               />
             </div>
 
-            <button 
-              onClick={() => { setShowUserModal(true); setEditingUser(null); }}
-              className="flex items-center gap-1.5 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-            >
-              <Users size={14} />
-              Manage Team
-            </button>
+            {isAdmin && (
+              <button 
+                onClick={() => { setShowUserModal(true); setEditingUser(null); }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                <Users size={14} />
+                Manage Team
+              </button>
+            )}
 
             <button 
               onClick={handlePullSync} 
