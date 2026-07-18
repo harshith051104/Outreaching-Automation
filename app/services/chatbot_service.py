@@ -3206,6 +3206,7 @@ CRITICAL RULES FOR LEADS:
   - You MUST include "import_leads" and pass the file URL in the "file_url" argument.
 
 CRITICAL RULES:
+- NO ATTACHMENT POLLUTION: When generating campaign templates, email templates, sequences, or body content, you MUST NEVER include any file attachment notices, file paths, download URLs, or '[Attached files: ...]' text. These are system metadata and attachments, not part of the outreach email copy.
 - If the user's prompt is a general greeting ("hi", "hello"), conversational question, or general query that does not ask to perform any platform action, set "is_conversational" to true, write a friendly response in "conversational_response", and leave "execution" empty.
 - If the prompt requires creating a campaign, importing leads, or generating sequence templates:
   - Include "create_campaign" first (if creating a new one).

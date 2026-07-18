@@ -184,6 +184,7 @@ const renderFormattedMessage = (content: string) => {
 interface ChatMessage {
   role: string;
   content: string;
+  files?: { name: string; url: string; type: string }[];
   pendingApproval?: ApprovalAction | null;
 }
 
@@ -448,13 +449,14 @@ export default function ChatbotPage() {
       }
     }
 
-    const newMessages: ChatMessage[] = [
-      ...messages,
-      { role: "user", content: userMessage },
-    ];
-    setMessages(newMessages);
     const filesToSend = [...uploadedFiles];
     setUploadedFiles([]);
+
+    const newMessages: ChatMessage[] = [
+      ...messages,
+      { role: "user", content: userMessage, files: filesToSend },
+    ];
+    setMessages(newMessages);
     setLoading(true);
 
     try {
@@ -499,11 +501,8 @@ export default function ChatbotPage() {
       textareaRef.current.style.height = "auto";
     }
 
-    if (uploadedFiles.length > 0) {
-      const fileInfo = uploadedFiles.map((f) => `${f.name} (${f.url})`).join(", ");
-      userMessage = userMessage
-        ? `${userMessage}\n\n[Attached files: ${fileInfo}]`
-        : `[Attached files: ${fileInfo}]`;
+    if (uploadedFiles.length > 0 && !userMessage) {
+      userMessage = "Import leads from the attached file.";
     }
 
     await executeMessage(userMessage);
@@ -773,7 +772,21 @@ export default function ChatbotPage() {
                         )}
                       </div>
                     ) : (
-                      <div className="whitespace-pre-wrap font-medium">{msg.content}</div>
+                      <div className="whitespace-pre-wrap font-medium">
+                        <div>{msg.content}</div>
+                        {msg.files && msg.files.length > 0 && (
+                          <div className="mt-2 space-y-1.5 pt-2 border-t border-white/10">
+                            {msg.files.map((file, fIdx) => (
+                              <div key={fIdx} className="flex items-center gap-1.5 text-xs text-white/95 font-semibold bg-white/15 px-2.5 py-1 rounded-lg w-fit">
+                                <span className="opacity-75">📎</span>
+                                <a href={file.url} target="_blank" rel="noreferrer" className="hover:underline">
+                                  {file.name}
+                                </a>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
