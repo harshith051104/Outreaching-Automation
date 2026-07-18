@@ -5,7 +5,7 @@ Handles OAuth2 flow, account management, email sending, and inbox reading.
 """
 
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from pydantic import BaseModel
 from starlette.responses import RedirectResponse
 
@@ -55,14 +55,25 @@ async def start_auth(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/callback", summary="Gmail OAuth callback")
-async def callback(code: str = Query(...), state: str | None = Query(None)):
+async def callback(request: Request, code: str = Query(...), state: str | None = Query(None)):
     """
     Handle the OAuth2 callback from Google.
     """
     try:
         await handle_callback(code, state)
+        
+        host = request.headers.get("host", "")
+        redirect_base = settings.FRONTEND_URL
+        
+        # If running in production (host doesn't contain localhost/127.0.0.1), use the current host domain
+        if host and "localhost" not in host and "127.0.0.1" not in host:
+            scheme = request.url.scheme
+            redirect_base = f"{scheme}://{host}"
+            
+        redirect_url = f"{redirect_base.rstrip('/')}/dashboard/gmail?status=connected"
+        
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/dashboard/gmail?status=connected",
+            url=redirect_url,
             status_code=302,
         )
     except Exception as exc:
