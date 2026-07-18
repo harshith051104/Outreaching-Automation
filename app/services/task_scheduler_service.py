@@ -54,6 +54,30 @@ def extract_retry_delay(error_msg: str, default_seconds: int = 300) -> int:
     return default_seconds
 
 
+def strip_inline_colors(html_text: str) -> str:
+    """Strip inline text colors and backgrounds from HTML styles to prevent light-on-white text issues."""
+    if not html_text:
+        return ""
+
+    import re
+    def clean_style_match(match):
+        style_content = match.group(2)
+        style_content = re.sub(r'(?i)color\s*:\s*[^;"]+;?', '', style_content)
+        style_content = re.sub(r'(?i)background-color\s*:\s*[^;"]+;?', '', style_content)
+        style_content = re.sub(r'(?i)background\s*:\s*[^;"]+;?', '', style_content)
+        style_content = style_content.strip().strip(';').strip()
+        if style_content:
+            return f'{match.group(1)}="{style_content}"'
+        else:
+            return ''
+
+    # Clean style="..." attributes
+    cleaned = re.sub(r'(style)\s*=\s*"([^"]*)"', clean_style_match, html_text)
+    # Clean style='...' attributes
+    cleaned = re.sub(r"(style)\s*=\s*'([^']*)'", clean_style_match, cleaned)
+    return cleaned
+
+
 def convert_text_to_html(text: str) -> str:
     """Convert plain text newlines and markdown formatting to HTML."""
     if not text:
@@ -78,7 +102,7 @@ def convert_text_to_html(text: str) -> str:
     text = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*(.*?)\*", r"<em>\1</em>", text)
 
-    return text
+    return strip_inline_colors(text)
 
 
 class TaskSchedulerService:

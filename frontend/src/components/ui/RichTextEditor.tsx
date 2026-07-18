@@ -49,6 +49,33 @@ export default function RichTextEditor({
     handleInput();
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const html = e.clipboardData.getData("text/html");
+    const text = e.clipboardData.getData("text/plain");
+
+    if (html) {
+      const tempDiv = document.createElement("div");
+      tempDiv.innerHTML = html;
+
+      // Clean inline style properties: color, background, background-color
+      const elements = tempDiv.getElementsByTagName("*");
+      for (let i = 0; i < elements.length; i++) {
+        const el = elements[i] as HTMLElement;
+        if (el.style) {
+          el.style.color = "";
+          el.style.backgroundColor = "";
+          el.style.background = "";
+        }
+      }
+
+      document.execCommand("insertHTML", false, tempDiv.innerHTML);
+    } else {
+      document.execCommand("insertText", false, text);
+    }
+    handleInput();
+  };
+
   return (
     <div className={`border border-gray-300 rounded-md overflow-hidden bg-white focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 ${className}`}>
       {/* Toolbar */}
@@ -93,6 +120,7 @@ export default function RichTextEditor({
         contentEditable
         onInput={handleInput}
         onBlur={handleInput}
+        onPaste={handlePaste}
         className="rich-text-editor-content override-email-colors p-3 min-h-[150px] outline-none text-sm text-gray-800 font-sans break-words overflow-y-auto"
         data-placeholder={placeholder}
       />
@@ -103,6 +131,7 @@ export default function RichTextEditor({
           color: #9ca3af;
           cursor: text;
           display: block;
+          white-space: pre-wrap;
         }
       `}} />
     </div>
