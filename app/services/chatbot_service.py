@@ -2268,7 +2268,7 @@ CHATBOT_TOOLS = [
 
 # ── Rule-based fallback parser ─────────────────────────────────────────────
 
-async def run_rule_based_fallback(user_id: str, message: str, background_tasks = None) -> Dict[str, Any] | None:
+async def run_rule_based_fallback(user_id: str, message: str, uploaded_files: List[Dict[str, str]] = None, background_tasks = None) -> Dict[str, Any] | None:
     """Parse message with regex and run automation. Used when Groq is unavailable."""
     if len(message) > 200000:
         return None
@@ -2309,13 +2309,20 @@ async def run_rule_based_fallback(user_id: str, message: str, background_tasks =
         actions_taken = [{"tool": "create_campaign", "arguments": args}]
         steps_done = [f"- Created campaign **{name}** (ID: `{campaign_id}`)"]
 
-        # Import leads from Google Sheet / CSV URL if present in same message
-        sheet_url_match = re.search(
-            r"(https?://docs\.google\.com/spreadsheets/[^\s]+|https?://[^\s]+\.csv[^\s]*)",
-            message, re.IGNORECASE
-        )
-        if sheet_url_match:
-            sheet_url = sheet_url_match.group(1).strip()
+        # Import leads from Google Sheet / CSV / XLSX URL or uploaded files
+        sheet_url = ""
+        if uploaded_files and len(uploaded_files) > 0:
+            sheet_url = uploaded_files[0].get("url", "")
+        
+        if not sheet_url:
+            sheet_url_match = re.search(
+                r"(/api/files/[a-zA-Z0-9\-_]+/download|https?://docs\.google\.com/spreadsheets/[^\s]+|https?://[^\s]+\.(?:csv|xlsx|xls)[^\s]*)",
+                message, re.IGNORECASE
+            )
+            if sheet_url_match:
+                sheet_url = sheet_url_match.group(1).strip()
+
+        if sheet_url:
             import_args = {"file_url": sheet_url, "campaign_id": campaign_id}
             import_res = await execute_tool("import_leads", import_args, user_id)
             try:
@@ -3096,7 +3103,7 @@ async def handle_chatbot_chat(
 
     is_key_empty = not api_key or api_key.strip() in ("", '""', "''", "None")
     if is_key_empty:
-        fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
+        fallback_res = await run_rule_based_fallback(user_id, message, uploaded_files=uploaded_files, background_tasks=background_tasks)
         if fallback_res:
             return fallback_res
         return {
@@ -3135,7 +3142,7 @@ async def handle_chatbot_chat(
     # This prevents the regex parser from intercepting complex prompts containing newlines/draft templates.
     is_simple_command = len(message) < 300 and not any(k in message.lower() for k in ["subject:", "body:", "dear", "follow-up", "template", "\n\n"])
     if is_simple_command:
-        rule_fallback = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
+        rule_fallback = await run_rule_based_fallback(user_id, message, uploaded_files=uploaded_files, background_tasks=background_tasks)
         if rule_fallback:
             logger.info("Rule-based fallback handled message: %s", message[:100])
             return rule_fallback
@@ -3289,7 +3296,7 @@ Your output must be strictly a JSON object matching this structure:
         plan = orchestrator_instance._extract_json(content_text)
     except Exception as e:
         logger.error(f"Failed to generate or parse plan: {e}")
-        fallback_res = await run_rule_based_fallback(user_id, message, background_tasks=background_tasks)
+        fallback_res = await run_rule_based_fallback(user_id, message, uploaded_files=uploaded_files, background_tasks=background_tasks)
         if fallback_res:
             return fallback_res
         return {"response": f"Planning failed: {e}", "actions_taken": []}
