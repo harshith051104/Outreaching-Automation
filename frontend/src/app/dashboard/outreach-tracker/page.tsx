@@ -551,7 +551,8 @@ export default function OutreachTrackerPage() {
               <span className="text-xs font-bold uppercase tracking-wider">Loading Tracker Data...</span>
             </div>
           ) : (
-            <div className="overflow-auto flex-1 scrollbar-thin scrollbar-thumb-white/10 max-w-full h-full">
+            <>
+              <div className="overflow-auto flex-1 scrollbar-thin scrollbar-thumb-white/10 max-w-full h-full">
               <table className="w-full border-collapse text-left text-xs text-slate-300 min-w-[2450px]">
               <thead>
                 <tr className="border-b border-white/5 bg-[#12121a] text-slate-400 font-bold uppercase tracking-wider text-[10px]">
@@ -760,7 +761,69 @@ export default function OutreachTrackerPage() {
               </tbody>
             </table>
           </div>
-        )}
+
+          {/* Pagination Bar */}
+          {!loading && data.total > 0 && (
+            <div className="border-t border-white/5 bg-[#0a0a0f]/40 px-6 py-3 flex items-center justify-between shrink-0 font-sans text-xs">
+              {/* Left Side: Showing info */}
+              <div className="text-slate-400 font-medium">
+                Showing <span className="text-white font-bold">{(data.page - 1) * data.page_size + 1}</span> to <span className="text-white font-bold">{Math.min(data.page * data.page_size, data.total)}</span> of <span className="text-white font-bold">{data.total}</span> leads
+              </div>
+
+              {/* Right Side: Page buttons */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={data.page === 1}
+                  onClick={() => setFilters(f => ({ ...f, page: data.page - 1 }))}
+                  className={`p-1.5 rounded-lg border border-white/5 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title="Previous Page"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+
+                {/* Render numbered pages */}
+                {Array.from({ length: Math.min(5, data.total_pages) }, (_, idx) => {
+                  let pageNum = idx + 1;
+                  if (data.total_pages > 5) {
+                    if (data.page > 3) {
+                      pageNum = data.page - 2 + idx;
+                    }
+                    if (pageNum + (4 - idx) > data.total_pages) {
+                      pageNum = data.total_pages - 4 + idx;
+                    }
+                  }
+                  
+                  return (
+                    <button
+                      type="button"
+                      key={pageNum}
+                      onClick={() => setFilters(f => ({ ...f, page: pageNum }))}
+                      className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                        data.page === pageNum
+                          ? "bg-gradient-to-r from-violet-600 to-indigo-600 text-white border-violet-500/50 shadow-md shadow-violet-500/10"
+                          : "border-white/5 bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  disabled={data.page === data.total_pages}
+                  onClick={() => setFilters(f => ({ ...f, page: data.page + 1 }))}
+                  className={`p-1.5 rounded-lg border border-white/5 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title="Next Page"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
       </div>
     </div>
 
