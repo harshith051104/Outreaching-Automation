@@ -11,6 +11,7 @@ from urllib.parse import quote, unquote
 from app.config.mongodb_config import get_database
 from app.config.settings import settings
 from app.utils.id_generator import generate_id
+from app.utils.security import sign_click_url
 
 from email_delivery.models import EmailRecord, EmailStatus, TrackingEvent
 from email_delivery.config import email_config
@@ -18,7 +19,7 @@ from email_delivery.config import email_config
 
 def build_click_tracking_url(tracking_id: str, original_url: str) -> str:
     encoded_url = quote(original_url, safe="")
-    return f"{settings.BACKEND_URL}/api/track/click/{tracking_id}?url={encoded_url}"
+    return f"{settings.BACKEND_URL}/api/track/click/{tracking_id}?url={encoded_url}&sig={sign_click_url(tracking_id, original_url)}"
 
 
 def replace_links_with_tracking(html: str, tracking_id: str) -> str:

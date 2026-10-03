@@ -55,3 +55,7 @@ graphify-out/
 
 # LLM rate-limit cooldown state (runtime, cross-process)
 app/services/.llm_rate_limit.json
+
+# Celerybeat schedule runtime files
+celerybeat-schedule*
+

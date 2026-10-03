@@ -11,6 +11,7 @@ from urllib.parse import quote, urlencode
 
 from app.config.constants import TRACKING_PIXEL_BASE64
 from app.config.settings import settings
+from app.utils.security import sign_click_url
 
 
 def build_tracking_pixel_url(tracking_id: str) -> str:
@@ -44,7 +45,7 @@ def build_click_tracking_url(tracking_id: str, original_url: str) -> str:
     encoded_url = quote(original_url, safe="")
     return (
         f"{settings.BACKEND_URL}/api/track/click/{tracking_id}"
-        f"?url={encoded_url}"
+        f"?url={encoded_url}&sig={sign_click_url(tracking_id, original_url)}"
     )
 
 

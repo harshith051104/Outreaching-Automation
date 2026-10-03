@@ -4,9 +4,13 @@ Settings and configuration for AI Outreach Platform v2.
 Loads environment variables with OUTREACH_ prefix.
 """
 
-from pydantic_settings import BaseSettings
-from typing import List
+import logging
 import os
+from typing import List
+
+from pydantic_settings import BaseSettings
+
+_INSECURE_JWT_SECRET = "change-me-in-production-use-strong-random-key"
 
 
 class Settings(BaseSettings):
@@ -50,7 +54,7 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: str = ""
     QDRANT_COLLECTION: str = "outreach"
 
-    JWT_SECRET: str = "change-me-in-production-use-strong-random-key"
+    JWT_SECRET: str = _INSECURE_JWT_SECRET
     COOKIE_ENCRYPTION_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
@@ -72,3 +76,21 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _validate_jwt_secret(cfg: Settings) -> None:
+    """Refuse to run with a known/weak JWT secret (it also seeds the Fernet key)."""
+    weak = cfg.JWT_SECRET == _INSECURE_JWT_SECRET or len(cfg.JWT_SECRET) < 32
+    if not weak:
+        return
+    msg = (
+        "JWT_SECRET is unset, default, or shorter than 32 chars. Set a strong random "
+        "value in .env (e.g. `python -c \"import secrets; print(secrets.token_urlsafe(64))\"`)."
+    )
+    if cfg.DEBUG:
+        logging.getLogger(__name__).warning("INSECURE CONFIG (DEBUG only): %s", msg)
+        return
+    raise RuntimeError(msg)
+
+
+_validate_jwt_secret(settings)

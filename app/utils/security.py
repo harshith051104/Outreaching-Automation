@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import logging
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -138,3 +139,22 @@ def sanitize_nosql(data: Any) -> Any:
     elif isinstance(data, list):
         return [sanitize_nosql(v) for v in data]
     return data
+
+
+def _click_signing_key() -> bytes:
+    from app.config.settings import settings  # local import to avoid circular deps
+
+    raw = settings.COOKIE_ENCRYPTION_KEY or settings.JWT_SECRET
+    return hashlib.sha256(b"click-tracking:" + raw.encode()).digest()
+
+
+def sign_click_url(tracking_id: str, url: str) -> str:
+    """HMAC signature binding a click-tracking redirect to its tracking ID and URL."""
+    msg = f"{tracking_id}\n{url}".encode()
+    return hmac.new(_click_signing_key(), msg, hashlib.sha256).hexdigest()[:32]
+
+
+def verify_click_url(tracking_id: str, url: str, sig: str) -> bool:
+    if not sig:
+        return False
+    return hmac.compare_digest(sign_click_url(tracking_id, url), sig)

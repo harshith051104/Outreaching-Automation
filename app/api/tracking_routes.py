@@ -10,6 +10,7 @@ from fastapi.responses import Response as FastAPIResponse
 
 from app.services.tracking_service import record_open, record_click, get_tracking_events
 from app.utils.email_utils import get_tracking_pixel_bytes
+from app.utils.security import verify_click_url
 
 router = APIRouter(tags=["Tracking"])
 
@@ -55,26 +56,40 @@ async def track_click(
     tracking_id: str,
     url: str,
     request: Request,
+    sig: str = "",
 ):
     """
     Track a link click event and redirect to the destination.
 
-    Args:
-        tracking_id: Unique tracking ID for the email.
-        url: Base64-encoded original destination URL.
+    The redirect target must be authentic: either the URL carries a valid HMAC
+    signature, or (for links in emails sent before signing existed) the URL
+    is an exact quoted href in the stored email body for this tracking ID. Anything else is
+    rejected so the endpoint cannot be used as an open redirect.
     """
-    from urllib.parse import unquote
+    import html
+    from urllib.parse import unquote, urlparse
 
-    original_url = unquote(url)
+    from fastapi import HTTPException, status
+
+    original_url = unquote(url).strip()
+    parsed = urlparse(original_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid url parameter")
+
+    if not verify_click_url(tracking_id, original_url, sig):
+        from app.config.mongodb_config import get_database
+
+        db = await get_database()
+        email = await db.emails.find_one({"tracking_id": tracking_id}, {"body_html": 1})
+        body = (email or {}).get("body_html") or ""
+        candidates = {original_url, html.escape(original_url)}
+        if not any(f'{q}{c}{q}' in body for c in candidates for q in ('"', "'")):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid tracking link")
 
     ip = _get_client_ip(request)
     user_agent = request.headers.get("user-agent", "")
 
     await record_click(tracking_id, original_url, ip, user_agent)
-
-    from fastapi import HTTPException, status
-    if not original_url or original_url == "None":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing url parameter")
 
     return FastAPIResponse(
         status_code=status.HTTP_302_FOUND,
