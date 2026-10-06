@@ -101,9 +101,7 @@ export default function Sidebar() {
       label: "Overview",
       items: [
         { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-        { href: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
         { href: "/dashboard/notifications", label: "Notifications", icon: Bell, badgeCount: unreadNotificationsCount },
-        { href: "/dashboard/suggestions", label: "Suggestions", icon: MessageSquare },
       ]
     },
     {
