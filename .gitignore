@@ -59,3 +59,5 @@ app/services/.llm_rate_limit.json
 # Celerybeat schedule runtime files
 celerybeat-schedule*
 
+.vercel
+.env*
