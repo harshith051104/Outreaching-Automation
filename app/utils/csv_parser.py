@@ -19,6 +19,11 @@ COLUMN_ALIASES: dict[str, str] = {
     "email": "email",
     "emailaddress": "email",
     "email_address": "email",
+    "work_email": "email",
+    "workemail": "email",
+    "contact_email": "email",
+    "primary_email": "email",
+    "personal_email": "email",
     "firstname": "first_name",
     "first_name": "first_name",
     "lastname": "last_name",
@@ -69,7 +74,10 @@ def normalize_column_name(col: str) -> str:
     
     # 2. Check similarity mappings for standard fields and custom fields
     # Email similarity - exact match only to avoid false matches on "email_status" etc.
-    if col_clean in ["email", "emailaddress", "email_address", "mail", "e_mail", "e-mail", "e_mail_address"]:
+    if col_clean in [
+        "email", "emailaddress", "email_address", "mail", "e_mail", "e-mail",
+        "e_mail_address", "work_email", "workemail", "contact_email", "primary_email", "personal_email"
+    ]:
         return "email"
         
     # First name similarity
@@ -207,6 +215,173 @@ def parse_leads_xlsx(file_content: bytes) -> list[dict[str, Any]]:
         rows.append(row_dict)
     wb.close()
     return rows
+
+
+def extract_spreadsheet_id(url: str) -> str:
+    """Extract Google Spreadsheet ID from full URL or bare ID."""
+    import re
+    if not url:
+        raise ValueError("Google Sheets URL cannot be empty.")
+    url_clean = url.strip()
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url_clean)
+    if match:
+        return match.group(1)
+    if re.match(r"^[a-zA-Z0-9-_]{20,}$", url_clean):
+        return url_clean
+    raise ValueError("Invalid Google Sheets URL format. Please provide a valid docs.google.com/spreadsheets URL.")
+
+
+def inspect_xlsx_sheets(file_content: bytes) -> list[dict[str, Any]]:
+    """
+    Inspect an Excel/Google Sheets workbook and return metadata for each sheet.
+    Metadata includes sheet name, non-empty row count, sample headers, and detected email leads.
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        raise ValueError("Excel parsing library (openpyxl) is not installed.")
+    import io
+
+    wb = openpyxl.load_workbook(filename=io.BytesIO(file_content), data_only=True, read_only=True)
+    if not wb.sheetnames:
+        raise ValueError("Workbook is empty.")
+
+    sheets_info: list[dict[str, Any]] = []
+
+    for name in wb.sheetnames:
+        ws = wb[name]
+        rows = list(ws.iter_rows(values_only=True, max_row=2000))
+        if not rows:
+            sheets_info.append({
+                "name": name,
+                "row_count": 0,
+                "headers": [],
+                "has_email": False,
+                "leads_count": 0,
+            })
+            continue
+
+        # Look for header row in top 3 rows
+        header_idx = 0
+        h_candidates = [str(c).strip() for c in rows[0] if c is not None and str(c).strip()]
+        if not any("email" in normalize_column_name(h) for h in h_candidates) and len(rows) > 1:
+            h_candidates_1 = [str(c).strip() for c in rows[1] if c is not None and str(c).strip()]
+            if any("email" in normalize_column_name(h) for h in h_candidates_1):
+                header_idx = 1
+                h_candidates = h_candidates_1
+            elif len(rows) > 2:
+                h_candidates_2 = [str(c).strip() for c in rows[2] if c is not None and str(c).strip()]
+                if any("email" in normalize_column_name(h) for h in h_candidates_2):
+                    header_idx = 2
+                    h_candidates = h_candidates_2
+
+        canonical = [
+            normalize_column_name(str(h).strip()) if h is not None and str(h).strip() else ""
+            for h in rows[header_idx]
+        ]
+        has_email = any(c == "email" for c in canonical)
+
+        # Count leads with valid email format and total rows
+        leads_count = 0
+        data_rows_count = 0
+        for r in rows[header_idx + 1:]:
+            has_data = any(cell is not None and str(cell).strip() != "" for cell in r)
+            if not has_data:
+                continue
+            data_rows_count += 1
+            if has_email:
+                row_email = ""
+                for idx, col in enumerate(canonical):
+                    if col == "email" and idx < len(r) and r[idx] is not None:
+                        row_email = str(r[idx]).strip()
+                        break
+                if row_email and "@" in row_email and "." in row_email.split("@")[-1]:
+                    leads_count += 1
+
+        sheets_info.append({
+            "name": name,
+            "row_count": data_rows_count,
+            "headers": h_candidates[:8],
+            "has_email": has_email,
+            "leads_count": leads_count,
+        })
+
+    wb.close()
+    return sheets_info
+
+
+def parse_leads_xlsx_sheets(
+    file_content: bytes, sheet_names: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """
+    Parse lead rows from specified sheet(s) of an Excel/Google Sheets workbook.
+    If sheet_names is None or empty, all sheets containing email headers are parsed.
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        raise ValueError("Excel parsing library (openpyxl) is not installed.")
+    import io
+
+    wb = openpyxl.load_workbook(filename=io.BytesIO(file_content), data_only=True, read_only=True)
+    if not wb.sheetnames:
+        raise ValueError("Workbook is empty.")
+
+    target_sheet_names: list[str] = []
+    if sheet_names:
+        for requested in sheet_names:
+            req_clean = requested.strip().lower()
+            for existing in wb.sheetnames:
+                if existing.strip().lower() == req_clean:
+                    if existing not in target_sheet_names:
+                        target_sheet_names.append(existing)
+                    break
+    else:
+        target_sheet_names = wb.sheetnames
+
+    all_rows: list[dict[str, Any]] = []
+
+    for sname in target_sheet_names:
+        ws = wb[sname]
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        # Look for header row in top 3 rows
+        header_idx = 0
+        h_candidates = [str(c).strip() for c in rows[0] if c is not None and str(c).strip()]
+        if not any("email" in normalize_column_name(h) for h in h_candidates) and len(rows) > 1:
+            h_candidates_1 = [str(c).strip() for c in rows[1] if c is not None and str(c).strip()]
+            if any("email" in normalize_column_name(h) for h in h_candidates_1):
+                header_idx = 1
+            elif len(rows) > 2:
+                h_candidates_2 = [str(c).strip() for c in rows[2] if c is not None and str(c).strip()]
+                if any("email" in normalize_column_name(h) for h in h_candidates_2):
+                    header_idx = 2
+
+        canonical_fields = [
+            normalize_column_name(str(h).strip()) if h is not None and str(h).strip() else ""
+            for h in rows[header_idx]
+        ]
+        if not any(f == "email" for f in canonical_fields):
+            continue
+
+        for i, row in enumerate(rows[header_idx + 1:], start=1):
+            if i > MAX_CSV_ROWS:
+                break
+            row_dict: dict[str, Any] = {}
+            for idx, field in enumerate(canonical_fields):
+                if not field:
+                    continue
+                val = row[idx] if idx < len(row) else None
+                row_dict[field] = str(val).strip() if val is not None else ""
+            if not row_dict.get("email") or "@" not in row_dict["email"]:
+                continue
+            row_dict["_sheet_source"] = sname
+            all_rows.append(row_dict)
+
+    wb.close()
+    return all_rows
 
 
 async def parse_leads_pdf(file_content: bytes) -> list[dict[str, Any]]:

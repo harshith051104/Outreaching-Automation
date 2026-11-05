@@ -58,10 +58,42 @@ export const getLeadOpportunity = async (leadId: string): Promise<{ status: stri
   return response.data;
 };
 
-export const importGoogleSheet = async (campaignId: string, url: string): Promise<{ imported: number; skipped: number; errors: string[] }> => {
-  const response = await api.post<{ imported: number; skipped: number; errors: string[] }>("/leads/import-google-sheet", {
+export interface SheetInfo {
+  name: string;
+  row_count: number;
+  headers: string[];
+  has_email: boolean;
+  leads_count: number;
+}
+
+export interface GoogleSheetInfoResponse {
+  spreadsheet_id: string;
+  url: string;
+  sheets: SheetInfo[];
+}
+
+export interface GoogleSheetImportResponse {
+  campaign_id: string;
+  imported: number;
+  skipped: number;
+  errors: string[];
+  sheets_processed?: string[];
+}
+
+export const getGoogleSheetInfo = async (url: string): Promise<GoogleSheetInfoResponse> => {
+  const response = await api.post<GoogleSheetInfoResponse>("/leads/google-sheet-info", { url });
+  return response.data;
+};
+
+export const importGoogleSheet = async (
+  campaignId: string,
+  url: string,
+  selectedSheets?: string[]
+): Promise<GoogleSheetImportResponse> => {
+  const response = await api.post<GoogleSheetImportResponse>("/leads/import-google-sheet", {
     campaign_id: campaignId,
-    url
+    url,
+    selected_sheets: selectedSheets
   });
   return response.data;
 };

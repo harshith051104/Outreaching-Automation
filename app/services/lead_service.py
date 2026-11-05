@@ -6,14 +6,25 @@ engagement history retrieval.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import HTTPException, status
+import httpx
+import logging
 
 from app.config.mongodb_config import get_database
 from app.schemas.lead import LeadCreate
 from app.utils.id_generator import generate_id
-from app.utils.csv_parser import parse_leads_file
+from app.utils.csv_parser import (
+    parse_leads_file,
+    extract_spreadsheet_id,
+    inspect_xlsx_sheets,
+    parse_leads_xlsx_sheets,
+    normalize_column_name,
+)
 from app.utils.validators import validate_email_format
+
+logger = logging.getLogger(__name__)
 
 
 async def create_lead(user_id: str, data: LeadCreate) -> dict:
@@ -164,13 +175,14 @@ async def delete_lead(lead_id: str, user_id: str) -> None:
     )
 
 
-async def import_leads_csv(
-    campaign_id: str, user_id: str, file_content: bytes, filename: str = "leads.csv"
+async def import_parsed_lead_rows(
+    campaign_id: str,
+    user_id: str,
+    rows: list[dict[str, Any]],
+    source_name: str = "leads",
 ) -> dict:
     """
-    Parse a lead file (CSV, Excel, or PDF), validate each row, and bulk-insert leads.
-
-    Returns summary with imported count, skipped count, and errors.
+    Validate and bulk-insert a list of pre-parsed lead dictionaries.
     """
     db = await get_database()
 
@@ -182,8 +194,6 @@ async def import_leads_csv(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Campaign not found.",
         )
-
-    rows = await parse_leads_file(file_content, filename)
 
     imported = 0
     skipped = 0
@@ -211,21 +221,23 @@ async def import_leads_csv(
 
         first_name = (row.get("first_name") or "").strip()
         last_name = (row.get("last_name") or "").strip()
-        
-        # Check for full name fields if first_name is missing
+
         full_name = ""
-        full_name_fields = ["name", "full_name", "fullname", "contact_name", "person_name", "investor's_name", "investors_name", "investor_name"]
+        full_name_fields = [
+            "name", "full_name", "fullname", "contact_name", "person_name",
+            "investor's_name", "investors_name", "investor_name"
+        ]
         for f in full_name_fields:
             if f in row and row[f]:
                 full_name = str(row[f]).strip()
                 break
-                
+
         if not first_name and full_name:
             parts = full_name.split(None, 1)
             first_name = parts[0]
             if not last_name and len(parts) > 1:
                 last_name = parts[1]
-                
+
         if not full_name:
             full_name = f"{first_name} {last_name}".strip() or email
 
@@ -239,7 +251,8 @@ async def import_leads_csv(
         standard_keys = {
             "email", "first_name", "last_name", "company", "title", "job_title", 
             "website", "url", "focus", "phone", "linkedin_url", "linkedin", "industry",
-            "name", "full_name", "fullname", "contact_name", "person_name", "investor's_name", "investors_name", "investor_name"
+            "name", "full_name", "fullname", "contact_name", "person_name",
+            "investor's_name", "investors_name", "investor_name", "_sheet_source"
         }
 
         custom_fields = {}
@@ -248,6 +261,9 @@ async def import_leads_csv(
                 val_str = str(v).strip()
                 if val_str:
                     custom_fields[k] = val_str
+
+        if row.get("_sheet_source"):
+            custom_fields["sheet_tab"] = str(row["_sheet_source"])
 
         lead_doc = {
             "id": generate_id(),
@@ -286,6 +302,220 @@ async def import_leads_csv(
         "skipped": skipped,
         "errors": errors[:50],
     }
+
+
+async def import_leads_csv(
+    campaign_id: str, user_id: str, file_content: bytes, filename: str = "leads.csv"
+) -> dict:
+    """
+    Parse a lead file (CSV, Excel, or PDF), validate each row, and bulk-insert leads.
+    """
+    rows = await parse_leads_file(file_content, filename)
+    return await import_parsed_lead_rows(campaign_id, user_id, rows, filename)
+
+
+async def fetch_google_sheet_worksheets(url: str, user_id: str) -> dict:
+    """
+    Inspect a Google Spreadsheet URL and list all available worksheets/tabs,
+    their approximate row counts, and whether email columns are detected.
+    """
+    spreadsheet_id = extract_spreadsheet_id(url)
+    export_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=xlsx"
+    xlsx_bytes = None
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        try:
+            resp = await client.get(export_url)
+            is_html_or_login = (
+                "accounts.google.com" in str(resp.url)
+                or "html" in resp.headers.get("content-type", "").lower()
+                or resp.status_code != 200
+                or len(resp.content) < 200
+            )
+            if not is_html_or_login:
+                xlsx_bytes = resp.content
+        except Exception as exc:
+            logger.warning("Public export request failed for spreadsheet %s: %s", spreadsheet_id, exc)
+
+    if xlsx_bytes:
+        sheets_info = inspect_xlsx_sheets(xlsx_bytes)
+        return {
+            "spreadsheet_id": spreadsheet_id,
+            "url": url,
+            "sheets": sheets_info,
+        }
+
+    # Fallback to authenticated Google OAuth API if user connected Google Account
+    try:
+        from app.services.google_sheets_service import _get_google_credentials
+        from googleapiclient.discovery import build
+        import asyncio
+
+        creds = await _get_google_credentials(user_id)
+
+        def _call_api():
+            service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            sheets = []
+            for s in meta.get("sheets", []):
+                props = s.get("properties", {})
+                title = props.get("title", "")
+                grid = props.get("gridProperties", {})
+                row_count = grid.get("rowCount", 0)
+                try:
+                    val_resp = service.spreadsheets().values().get(
+                        spreadsheetId=spreadsheet_id, range=f"'{title}'!A1:Z3"
+                    ).execute()
+                    values = val_resp.get("values", [])
+                    headers = [str(c).strip() for c in values[0]] if values else []
+                    canonical = [normalize_column_name(h) for h in headers]
+                    has_email = any(c == "email" for c in canonical)
+                except Exception:
+                    headers = []
+                    has_email = False
+
+                sheets.append({
+                    "name": title,
+                    "row_count": max(0, row_count - 1),
+                    "headers": headers[:8],
+                    "has_email": has_email,
+                    "leads_count": max(0, row_count - 1) if has_email else 0,
+                })
+            return sheets
+
+        sheets_info = await asyncio.to_thread(_call_api)
+        return {
+            "spreadsheet_id": spreadsheet_id,
+            "url": url,
+            "sheets": sheets_info,
+        }
+    except Exception as api_exc:
+        logger.warning("Google API fallback failed for sheet %s: %s", spreadsheet_id, api_exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to access Google Sheet. Please ensure sharing is set to 'Anyone with the link can view' or connect your Google account in Settings.",
+        )
+
+
+async def import_google_sheet_leads(
+    campaign_id: str,
+    user_id: str,
+    url: str,
+    selected_sheets: list[str] | None = None,
+) -> dict:
+    """
+    Import leads from a Google Spreadsheet, extracting data from one or more selected sheets.
+    """
+    spreadsheet_id = extract_spreadsheet_id(url)
+    export_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=xlsx"
+    xlsx_bytes = None
+
+    async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+        try:
+            resp = await client.get(export_url)
+            is_html_or_login = (
+                "accounts.google.com" in str(resp.url)
+                or "html" in resp.headers.get("content-type", "").lower()
+                or resp.status_code != 200
+                or len(resp.content) < 200
+            )
+            if not is_html_or_login:
+                xlsx_bytes = resp.content
+        except Exception as exc:
+            logger.warning("Public export request failed for spreadsheet %s: %s", spreadsheet_id, exc)
+
+    rows: list[dict[str, Any]] = []
+    sheets_processed: list[str] = []
+
+    if xlsx_bytes:
+        rows = parse_leads_xlsx_sheets(xlsx_bytes, selected_sheets)
+        sheets_processed = selected_sheets or [r.get("_sheet_source") for r in rows if r.get("_sheet_source")]
+        sheets_processed = list(dict.fromkeys([s for s in sheets_processed if s]))
+    else:
+        # Fallback to Google Sheets API
+        try:
+            from app.services.google_sheets_service import _get_google_credentials
+            from googleapiclient.discovery import build
+            import asyncio
+
+            creds = await _get_google_credentials(user_id)
+
+            def _call_api_values():
+                service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+                meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+                all_sheet_titles = [s.get("properties", {}).get("title", "") for s in meta.get("sheets", [])]
+
+                target_titles = []
+                if selected_sheets:
+                    for req in selected_sheets:
+                        req_clean = req.strip().lower()
+                        for title in all_sheet_titles:
+                            if title.strip().lower() == req_clean:
+                                if title not in target_titles:
+                                    target_titles.append(title)
+                                break
+                else:
+                    target_titles = all_sheet_titles
+
+                fetched_rows = []
+                for title in target_titles:
+                    try:
+                        val_resp = service.spreadsheets().values().get(
+                            spreadsheetId=spreadsheet_id, range=f"'{title}'"
+                        ).execute()
+                        values = val_resp.get("values", [])
+                        if not values or len(values) < 2:
+                            continue
+
+                        header_idx = 0
+                        h_candidates = [str(c).strip() for c in values[0] if c]
+                        if not any("email" in normalize_column_name(h) for h in h_candidates) and len(values) > 1:
+                            h_candidates_1 = [str(c).strip() for c in values[1] if c]
+                            if any("email" in normalize_column_name(h) for h in h_candidates_1):
+                                header_idx = 1
+                            elif len(values) > 2:
+                                h_candidates_2 = [str(c).strip() for c in values[2] if c]
+                                if any("email" in normalize_column_name(h) for h in h_candidates_2):
+                                    header_idx = 2
+
+                        canonical = [
+                            normalize_column_name(str(h).strip()) if h and str(h).strip() else ""
+                            for h in values[header_idx]
+                        ]
+                        if not any(f == "email" for f in canonical):
+                            continue
+
+                        for r in values[header_idx + 1:]:
+                            row_dict = {}
+                            for idx, field in enumerate(canonical):
+                                if not field:
+                                    continue
+                                val = r[idx] if idx < len(r) else None
+                                row_dict[field] = str(val).strip() if val is not None else ""
+                            if not row_dict.get("email") or "@" not in row_dict["email"]:
+                                continue
+                            row_dict["_sheet_source"] = title
+                            fetched_rows.append(row_dict)
+                    except Exception as err:
+                        logger.warning("Failed to fetch values for tab %s: %s", title, err)
+                return fetched_rows, target_titles
+
+            rows, sheets_processed = await asyncio.to_thread(_call_api_values)
+        except Exception as api_exc:
+            logger.warning("Google API fallback failed for sheet %s: %s", spreadsheet_id, api_exc)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to access Google Sheet. Please ensure sharing is set to 'Anyone with the link can view' or connect your Google account in Settings.",
+            )
+
+    result = await import_parsed_lead_rows(
+        campaign_id=campaign_id,
+        user_id=user_id,
+        rows=rows,
+        source_name=f"google_sheet_{spreadsheet_id}",
+    )
+    result["sheets_processed"] = sheets_processed
+    return result
 
 
 async def update_lead_score(lead_id: str, score_delta: float) -> dict:

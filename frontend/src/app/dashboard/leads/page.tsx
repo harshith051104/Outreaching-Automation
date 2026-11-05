@@ -10,11 +10,16 @@ import {
   getLeadSignals,
   getLeadOpportunity,
   evaluateLeadOpportunity,
-  importGoogleSheet
+  importGoogleSheet,
+  getGoogleSheetInfo,
+  type SheetInfo
 } from "@/services/lead-api";
 import { getCampaigns } from "@/services/campaign-api";
 import { extractErrorMessage } from "@/utils/error";
-import { Users, Upload, Plus, X, Zap, Search, Star, Target } from "lucide-react";
+import { 
+  Users, Upload, Plus, X, Zap, Search, Star, Target,
+  Layers, CheckSquare, Square, FileSpreadsheet, Loader2, AlertCircle
+} from "lucide-react";
 
 const STATUS_COLORS: Record<string, { color: string; bg: string; border: string }> = {
   new:       { color: '#7c5cff', bg: 'rgba(124,92,255,0.1)',  border: 'rgba(124,92,255,0.25)' },
@@ -51,6 +56,11 @@ export default function LeadsPage() {
   const [csvSuccess, setCsvSuccess] = useState("");
   const [importMethod, setImportMethod] = useState<"file" | "url">("file");
   const [googleSheetUrl, setGoogleSheetUrl] = useState("");
+  const [sheetsInfo, setSheetsInfo] = useState<SheetInfo[]>([]);
+  const [selectedSheets, setSelectedSheets] = useState<string[]>([]);
+  const [fetchingSheets, setFetchingSheets] = useState(false);
+  const [fetchSheetsError, setFetchSheetsError] = useState("");
+  const [isImporting, setIsImporting] = useState(false);
   const [leadForm, setLeadForm] = useState({ first_name: "", last_name: "", email: "", company: "", title: "", website: "", focus: "" });
   const [leadError, setLeadError] = useState("");
   const [editForm, setEditForm] = useState<{
@@ -87,25 +97,96 @@ export default function LeadsPage() {
   };
 
 
+  const closeCsvModal = () => {
+    setIsCsvModalOpen(false);
+    setCsvError("");
+    setCsvSuccess("");
+    setSheetsInfo([]);
+    setSelectedSheets([]);
+    setFetchSheetsError("");
+    setFetchingSheets(false);
+    setIsImporting(false);
+  };
+
+  const handleFetchSheets = async (urlToFetch?: string) => {
+    const targetUrl = (urlToFetch || googleSheetUrl).trim();
+    if (!targetUrl) {
+      setFetchSheetsError("Please enter a Google Sheets URL first.");
+      return;
+    }
+    setFetchingSheets(true);
+    setFetchSheetsError("");
+    setSheetsInfo([]);
+    setSelectedSheets([]);
+    try {
+      const res = await getGoogleSheetInfo(targetUrl);
+      const sheets = res.sheets || [];
+      setSheetsInfo(sheets);
+      // Auto-select sheets with detected emails or leads
+      const sheetsWithEmail = sheets.filter(s => s.has_email || s.leads_count > 0).map(s => s.name);
+      if (sheetsWithEmail.length > 0) {
+        setSelectedSheets(sheetsWithEmail);
+      } else {
+        setSelectedSheets(sheets.map(s => s.name));
+      }
+    } catch (err: any) {
+      setFetchSheetsError(extractErrorMessage(err, "Failed to load sheets. Ensure the sheet sharing is set to 'Anyone with the link can view'."));
+    } finally {
+      setFetchingSheets(false);
+    }
+  };
+
+  const toggleSheetSelection = (sheetName: string) => {
+    setSelectedSheets(prev => 
+      prev.includes(sheetName) ? prev.filter(s => s !== sheetName) : [...prev, sheetName]
+    );
+  };
+
+  const handleSelectAllSheets = () => {
+    setSelectedSheets(sheetsInfo.map(s => s.name));
+  };
+
+  const handleDeselectAllSheets = () => {
+    setSelectedSheets([]);
+  };
+
   const handleCsvUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCampaignId) { setCsvError("Please select a campaign."); return; }
     setCsvError(""); setCsvSuccess("");
+    setIsImporting(true);
     try {
       if (importMethod === "file") {
-        if (!csvFile) { setCsvError("Please select a CSV file."); return; }
+        if (!csvFile) { setCsvError("Please select a CSV file."); setIsImporting(false); return; }
         const res = await uploadLeadCsv(selectedCampaignId, csvFile);
         setCsvSuccess(`Successfully imported ${res.imported} leads! (Skipped: ${res.skipped})`);
         setCsvFile(null);
       } else {
-        if (!googleSheetUrl.trim()) { setCsvError("Please paste a Google Sheets URL."); return; }
-        const res = await importGoogleSheet(selectedCampaignId, googleSheetUrl);
-        setCsvSuccess(`Successfully imported ${res.imported} leads! (Skipped: ${res.skipped})`);
+        if (!googleSheetUrl.trim()) { setCsvError("Please paste a Google Sheets URL."); setIsImporting(false); return; }
+        if (sheetsInfo.length > 0 && selectedSheets.length === 0) {
+          setCsvError("Please select at least one sheet to import.");
+          setIsImporting(false);
+          return;
+        }
+        const res = await importGoogleSheet(
+          selectedCampaignId,
+          googleSheetUrl,
+          sheetsInfo.length > 0 ? selectedSheets : undefined
+        );
+        const sheetCount = res.sheets_processed?.length || selectedSheets.length;
+        const sheetMsg = sheetCount > 0 ? ` across ${sheetCount} sheet(s)` : "";
+        setCsvSuccess(`Successfully imported ${res.imported} leads${sheetMsg}! (Skipped: ${res.skipped})`);
         setGoogleSheetUrl("");
+        setSheetsInfo([]);
+        setSelectedSheets([]);
       }
       loadLeads(selectedCampaignFilterId);
-      setTimeout(() => { setIsCsvModalOpen(false); setCsvSuccess(""); }, 2000);
-    } catch (err: any) { setCsvError(extractErrorMessage(err, "Failed to import leads.")); }
+      setTimeout(() => { closeCsvModal(); }, 2500);
+    } catch (err: any) { 
+      setCsvError(extractErrorMessage(err, "Failed to import leads.")); 
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleCreateLead = async (e: React.FormEvent) => {
@@ -502,13 +583,21 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* CSV Import Modal */}
+      {/* CSV / Google Sheets Import Modal */}
       {isCsvModalOpen && (
         <div style={overlayStyle}>
-          <div style={modalStyle}>
+          <div style={{ ...modalStyle, maxWidth: sheetsInfo.length > 0 ? '560px' : '500px', transition: 'max-width 0.2s ease' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--foreground-color)', margin: 0 }}>Import Leads</h2>
-              <button onClick={() => setIsCsvModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--sidebar-text-muted)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{
+                  width: '28px', height: '28px', borderRadius: '8px',
+                  background: 'rgba(124,92,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                  <Upload size={14} color="#7c5cff" />
+                </div>
+                <h2 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--foreground-color)', margin: 0 }}>Import Leads</h2>
+              </div>
+              <button onClick={closeCsvModal} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--sidebar-text-muted)' }}>
                 <X size={20} />
               </button>
             </div>
@@ -529,7 +618,7 @@ export default function LeadsPage() {
                 <div style={{ display: 'flex', gap: '8px', background: 'var(--sidebar-toggle-bg)', padding: '4px', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
                   <button
                     type="button"
-                    onClick={() => setImportMethod("file")}
+                    onClick={() => { setImportMethod("file"); setFetchSheetsError(""); }}
                     style={{
                       flex: 1, padding: '6px 12px', borderRadius: '6px', border: 'none',
                       background: importMethod === "file" ? 'linear-gradient(135deg, #7c5cff, #6344d9)' : 'transparent',
@@ -560,17 +649,218 @@ export default function LeadsPage() {
                   <input type="file" accept=".csv, .xlsx, .xls, .pdf" onChange={e => setCsvFile(e.target.files?.[0] || null)} style={{ fontSize: '13px', color: 'var(--foreground-color)' }} required={importMethod === "file"} />
                 </div>
               ) : (
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '6px' }}>Google Sheets URL *</label>
-                  <input type="url" placeholder="https://docs.google.com/spreadsheets/d/.../edit?usp=sharing" value={googleSheetUrl} onChange={e => setGoogleSheetUrl(e.target.value)} style={inputStyle} required={importMethod === "url"} />
-                  <p style={{ fontSize: '10px', color: 'var(--sidebar-text-muted)', marginTop: '4px' }}>Ensure the Google Sheet is shared with "Anyone with the link can view".</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: 'var(--sidebar-text-muted)', marginBottom: '6px' }}>Google Sheets URL *</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        type="url" 
+                        placeholder="https://docs.google.com/spreadsheets/d/.../edit?usp=sharing" 
+                        value={googleSheetUrl} 
+                        onChange={e => {
+                          setGoogleSheetUrl(e.target.value);
+                          if (sheetsInfo.length > 0) {
+                            setSheetsInfo([]);
+                            setSelectedSheets([]);
+                            setFetchSheetsError("");
+                          }
+                        }} 
+                        style={{ ...inputStyle, flex: 1 }} 
+                        required={importMethod === "url"} 
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleFetchSheets()}
+                        disabled={fetchingSheets || !googleSheetUrl.trim()}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '0 14px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--card-border)',
+                          background: 'var(--sidebar-hover)',
+                          color: 'var(--foreground-color)',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          cursor: (fetchingSheets || !googleSheetUrl.trim()) ? 'not-allowed' : 'pointer',
+                          opacity: (fetchingSheets || !googleSheetUrl.trim()) ? 0.6 : 1,
+                          whiteSpace: 'nowrap',
+                          transition: 'all 0.2s'
+                        }}
+                        title="Inspect and load worksheet tabs"
+                      >
+                        {fetchingSheets ? (
+                          <>
+                            <Loader2 size={13} className="animate-spin" />
+                            <span>Loading...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Layers size={13} color="#7c5cff" />
+                            <span>Load Sheets</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <p style={{ fontSize: '10px', color: 'var(--sidebar-text-muted)', marginTop: '4px' }}>Ensure the Google Sheet is shared with "Anyone with the link can view".</p>
+                  </div>
+
+                  {fetchSheetsError && (
+                    <div style={{
+                      display: 'flex', alignItems: 'flex-start', gap: '8px',
+                      padding: '10px 12px', borderRadius: '8px',
+                      background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)',
+                      color: '#ef4444', fontSize: '12px'
+                    }}>
+                      <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <span>{fetchSheetsError}</span>
+                    </div>
+                  )}
+
+                  {fetchingSheets && (
+                    <div style={{
+                      padding: '16px', borderRadius: '10px',
+                      background: 'rgba(124,92,255,0.06)', border: '1px dashed rgba(124,92,255,0.3)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                      color: '#7c5cff', fontSize: '12px', fontWeight: '500'
+                    }}>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Discovering sheets in Google Spreadsheet...</span>
+                    </div>
+                  )}
+
+                  {sheetsInfo.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--foreground-color)', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <FileSpreadsheet size={14} color="#7c5cff" />
+                          <span>Select Sheets to Import ({selectedSheets.length}/{sheetsInfo.length})</span>
+                        </label>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={handleSelectAllSheets}
+                            style={{
+                              background: 'none', border: 'none', padding: 0,
+                              fontSize: '11px', fontWeight: '600', color: '#7c5cff',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Select All
+                          </button>
+                          <span style={{ fontSize: '11px', color: 'var(--sidebar-text-muted)' }}>·</span>
+                          <button
+                            type="button"
+                            onClick={handleDeselectAllSheets}
+                            style={{
+                              background: 'none', border: 'none', padding: 0,
+                              fontSize: '11px', fontWeight: '600', color: 'var(--sidebar-text-muted)',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Scrollable sheet list */}
+                      <div style={{
+                        maxHeight: '190px',
+                        overflowY: 'auto',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                        padding: '6px',
+                        background: 'var(--sidebar-toggle-bg)',
+                        border: '1px solid var(--card-border)',
+                        borderRadius: '10px'
+                      }}>
+                        {sheetsInfo.map((sheet) => {
+                          const isSelected = selectedSheets.includes(sheet.name);
+                          return (
+                            <div
+                              key={sheet.name}
+                              onClick={() => toggleSheetSelection(sheet.name)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '8px 12px',
+                                borderRadius: '8px',
+                                border: `1px solid ${isSelected ? 'rgba(124,92,255,0.45)' : 'transparent'}`,
+                                background: isSelected ? 'rgba(124,92,255,0.12)' : 'var(--card-bg)',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease',
+                                userSelect: 'none'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                                <div style={{ color: isSelected ? '#7c5cff' : 'var(--sidebar-text-muted)' }}>
+                                  {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+                                </div>
+                                <span style={{
+                                  fontSize: '13px',
+                                  fontWeight: isSelected ? '600' : '500',
+                                  color: isSelected ? 'var(--foreground-color)' : 'var(--sidebar-text-muted)',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis'
+                                }}>
+                                  {sheet.name}
+                                </span>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                                {sheet.has_email ? (
+                                  <span style={{
+                                    padding: '2px 8px', borderRadius: '12px',
+                                    background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)',
+                                    color: '#10b981', fontSize: '10px', fontWeight: '600'
+                                  }}>
+                                    {sheet.leads_count > 0 ? `${sheet.leads_count} leads` : 'Has Emails'}
+                                  </span>
+                                ) : (
+                                  <span style={{
+                                    padding: '2px 8px', borderRadius: '12px',
+                                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                                    color: 'var(--sidebar-text-muted)', fontSize: '10px', fontWeight: '500'
+                                  }}>
+                                    {sheet.row_count > 0 ? `${sheet.row_count} rows` : 'No Leads'}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', paddingTop: '4px' }}>
-                <button type="button" onClick={() => setIsCsvModalOpen(false)} style={{ padding: '9px 18px', borderRadius: '9px', border: '1px solid var(--card-border)', background: 'var(--sidebar-hover)', color: 'var(--foreground-color)', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
-                <button type="submit" style={{ padding: '9px 18px', borderRadius: '9px', border: 'none', background: 'linear-gradient(135deg, #7c5cff, #6344d9)', color: 'white', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-                  {importMethod === "file" ? "Upload File" : "Import Google Sheet"}
+                <button type="button" onClick={closeCsvModal} style={{ padding: '9px 18px', borderRadius: '9px', border: '1px solid var(--card-border)', background: 'var(--sidebar-hover)', color: 'var(--foreground-color)', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                <button 
+                  type="submit" 
+                  disabled={isImporting || (importMethod === "url" && sheetsInfo.length > 0 && selectedSheets.length === 0)}
+                  style={{ 
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '9px 18px', borderRadius: '9px', border: 'none', 
+                    background: 'linear-gradient(135deg, #7c5cff, #6344d9)', color: 'white', 
+                    fontSize: '13px', fontWeight: '600', 
+                    cursor: (isImporting || (importMethod === "url" && sheetsInfo.length > 0 && selectedSheets.length === 0)) ? 'not-allowed' : 'pointer',
+                    opacity: (isImporting || (importMethod === "url" && sheetsInfo.length > 0 && selectedSheets.length === 0)) ? 0.6 : 1
+                  }}
+                >
+                  {isImporting && <Loader2 size={14} className="animate-spin" />}
+                  <span>
+                    {importMethod === "file" 
+                      ? (isImporting ? "Importing File..." : "Upload File")
+                      : (sheetsInfo.length > 0 
+                          ? (isImporting ? "Importing Sheets..." : `Import Selected Sheets (${selectedSheets.length})`)
+                          : (isImporting ? "Importing..." : "Import Google Sheet"))}
+                  </span>
                 </button>
               </div>
             </form>

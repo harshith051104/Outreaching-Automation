@@ -16,6 +16,8 @@ from app.services.lead_service import (
     delete_lead,
     import_leads_csv,
     get_lead_engagement,
+    fetch_google_sheet_worksheets,
+    import_google_sheet_leads,
 )
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
@@ -121,9 +123,15 @@ async def get_lead_engagement_route(
 
 from pydantic import BaseModel
 
+class GoogleSheetInfoRequest(BaseModel):
+    url: str
+
+
 class GoogleSheetImportRequest(BaseModel):
     campaign_id: str
     url: str
+    selected_sheets: list[str] | None = None
+
 
 def extract_google_sheet_csv_url(url: str) -> str:
     """
@@ -137,6 +145,17 @@ def extract_google_sheet_csv_url(url: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv"
 
 
+@router.post("/google-sheet-info", summary="Inspect a Google Sheet URL and list its worksheets")
+async def get_google_sheet_info(
+    body: GoogleSheetInfoRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Inspect a Google Sheet URL and return the list of sheets/tabs with row counts and email status.
+    """
+    return await fetch_google_sheet_worksheets(body.url, current_user["id"])
+
+
 @router.post("/import-google-sheet", summary="Import leads directly from a Google Sheet URL")
 async def import_from_google_sheet(
     body: GoogleSheetImportRequest,
@@ -145,30 +164,11 @@ async def import_from_google_sheet(
     """
     Import leads directly from a shared Google Sheets URL.
     The sheet must be accessible (e.g. 'Anyone with link can view' sharing turned on).
+    Optionally specify selected_sheets to only import from those sheets.
     """
-    import httpx
-    
-    try:
-        csv_url = extract_google_sheet_csv_url(body.url)
-    except ValueError as err:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(err)
-        )
-        
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(csv_url, follow_redirects=True)
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Failed to fetch Google Sheet. HTTP Status: {response.status_code}. Ensure the sheet sharing is set to 'Anyone with the link can view'."
-                )
-            content = response.content
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error connecting to Google Sheets: {exc}"
-        )
-        
-    return await import_leads_csv(body.campaign_id, current_user["id"], content, "leads.csv")
+    return await import_google_sheet_leads(
+        campaign_id=body.campaign_id,
+        user_id=current_user["id"],
+        url=body.url,
+        selected_sheets=body.selected_sheets,
+    )
